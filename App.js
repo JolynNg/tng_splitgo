@@ -19,7 +19,7 @@ import ClaimScreen from './src/screens/ClaimScreen';
 import SummaryScreen from './src/screens/SummaryScreen';
 import RequestScreen from './src/screens/RequestScreen';
 import SettledScreen from './src/screens/SettledScreen';
-import HistoryScreen from './src/screens/HistoryScreen';
+import PaymentSuccessScreen from './src/screens/PaymentSuccessScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -53,8 +53,9 @@ function AuthGate() {
     <FlowProvider>
       <NavigationContainer>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Home"         component={HomeScreen} />
-          <Stack.Screen name="SplitGoHome"  component={SplitGoHomeScreen} />
+          <Stack.Screen name="Home"           component={HomeScreen} />
+          <Stack.Screen name="PaymentSuccess" component={PaymentSuccessScreen} />
+          <Stack.Screen name="SplitGoHome"    component={SplitGoHomeScreen} />
           <Stack.Screen name="Scan"         component={ScanScreen} />
           <Stack.Screen name="Items"        component={ItemsScreen} />
           <Stack.Screen name="Participants" component={ParticipantsScreen} />
@@ -63,7 +64,6 @@ function AuthGate() {
           <Stack.Screen name="Summary"      component={SummaryScreen} />
           <Stack.Screen name="Request"      component={RequestScreen} />
           <Stack.Screen name="Settled"      component={SettledScreen} />
-          <Stack.Screen name="History"      component={HistoryScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </FlowProvider>

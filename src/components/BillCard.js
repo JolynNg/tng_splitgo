@@ -47,8 +47,18 @@ export default function BillCard({ bill, onOpen, resuming, compact = false }) {
   const ppl       = bill.participantCount || (bill.participants || []).length;
   const pplDone   = bill.claimedParticipants || 0;
   const pplOthers = Math.max(0, ppl - 1);
+  const paidCount = (bill.paid || []).length;
   const title     = billTitle(bill);
   const initial   = (title[0] || '?').toUpperCase();
+
+  // Status pill copy: open bills show how far the *payment* progress is
+  // (since claims are usually finished long before money moves), closed
+  // bills surface as "ALL PAID" so the auto-close is obvious.
+  let statusLabel;
+  if (isCancelled)       statusLabel = 'CANCELLED';
+  else if (isClosed)     statusLabel = 'ALL PAID';
+  else if (paidCount === 0) statusLabel = 'OPEN';
+  else                   statusLabel = `PAYING · ${paidCount}/${pplOthers}`;
 
   return (
     <TouchableOpacity
@@ -81,7 +91,7 @@ export default function BillCard({ bill, onOpen, resuming, compact = false }) {
             styles.statusText,
             { color: isCancelled ? '#B91C1C' : isClosed ? SG.success : SG.accentDeep },
           ]}>
-            {isCancelled ? 'CANCELLED' : isClosed ? 'CLOSED' : 'OPEN'}
+            {statusLabel}
           </Text>
         </View>
       </View>

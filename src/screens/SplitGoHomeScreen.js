@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, StatusBar,
   ActivityIndicator, RefreshControl, Alert,
-} from 'react-native'; // Alert kept for handleOpen error reporting
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -13,14 +13,11 @@ import { useFlow } from '../context/FlowContext';
 import { useAuth } from '../context/AuthContext';
 
 /**
- * SplitGoHomeScreen — the actual SplitGo "app within TnG".
+ * SplitGoHomeScreen — single-pane home for the SplitGo "app within TnG".
  *
- * Three jobs:
- *   1. Show the user's active (un-settled) bills, with live claim progress
- *      polled every 5 s. Tap a card to resume into the live dashboard or
- *      claim view, depending on whether you're the creator or a participant.
- *   2. Big "Scan a new receipt" CTA → camera (ScanScreen).
- *   3. History link in the top-right, covering settled bills too.
+ *   1. Big "Scan a new receipt" CTA → camera (ScanScreen).
+ *   2. All of the user's bills, grouped: Active first, then Settled below.
+ *      No separate History tab — every bill lives on one scroll.
  */
 export default function SplitGoHomeScreen({ navigation }) {
   const { loadBillFromServer } = useFlow();
@@ -31,9 +28,7 @@ export default function SplitGoHomeScreen({ navigation }) {
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefr]   = useState(false);
   const [error, setError]       = useState(null);
-  const [cloudMode, setCloud]   = useState(true);
   const [resumingId, setResumingId] = useState(null);
-  const [lastSyncAt, setLastSyncAt] = useState(null);
   const aliveRef = useRef(true);
 
   const fetchBills = useCallback(async () => {
@@ -41,10 +36,7 @@ export default function SplitGoHomeScreen({ navigation }) {
     try {
       const r = await listBillsForUser(myName);
       if (!aliveRef.current) return;
-      // SplitGoHome only surfaces in-flight bills — settled ones live in History.
-      setBills((r.bills || []).filter(b => b.status === 'open'));
-      setCloud(!r.local);
-      setLastSyncAt(Date.now());
+      setBills(r.bills || []);
       setError(null);
       // Wallet balance can change when someone else pays *us*, so refresh
       // alongside every bill poll to keep the home dashboard accurate.
@@ -82,8 +74,9 @@ export default function SplitGoHomeScreen({ navigation }) {
         return;
       }
       loadBillFromServer(full);
-      // Everyone opens the same live dashboard; "Pick mine" goes to Claim.
-      const target = full.status === 'closed' ? 'Summary' : 'BillCreated';
+      // Closed/cancelled bills go to the read-only summary; live ones go
+      // back to the dashboard where you (or the payer) drive the flow.
+      const target = full.status === 'open' ? 'BillCreated' : 'Summary';
       navigation.navigate(target);
     } catch (err) {
       Alert.alert('Could not open bill', err.message);
@@ -91,6 +84,17 @@ export default function SplitGoHomeScreen({ navigation }) {
       setResumingId(null);
     }
   };
+
+  // Split bills into active/settled groups for grouped rendering. We keep
+  // the server's order (newest first) inside each group.
+  const { active, settled } = useMemo(() => {
+    const a = [], s = [];
+    bills.forEach((b) => {
+      if (b.status === 'open') a.push(b);
+      else s.push(b);
+    });
+    return { active: a, settled: s };
+  }, [bills]);
 
   return (
     <View style={styles.screen}>
@@ -103,9 +107,6 @@ export default function SplitGoHomeScreen({ navigation }) {
           style={styles.header}
         >
           <View style={styles.headerRow}>
-            {/* Title is the only flex child so it naturally centers itself.
-                The back button (left) and history pill (right) are absolutely
-                positioned over the row so they don't push the title off-center. */}
             <View style={styles.headerTitleWrap}>
               <Text style={styles.headerTitle}>SplitGo</Text>
             </View>
@@ -119,19 +120,6 @@ export default function SplitGoHomeScreen({ navigation }) {
               <Svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <Path d="M12 4l-6 6 6 6" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </Svg>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => navigation.navigate('History')}
-              style={[styles.historyBtn, styles.headerRight]}
-              activeOpacity={0.8}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Svg width="16" height="16" viewBox="0 0 18 18" fill="none">
-                <Circle cx="9" cy="9" r="7" stroke="#fff" strokeWidth="1.6" />
-                <Path d="M9 5v4l2.5 2" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-              </Svg>
-              <Text style={styles.historyBtnText}>History</Text>
             </TouchableOpacity>
           </View>
         </LinearGradient>
@@ -172,15 +160,10 @@ export default function SplitGoHomeScreen({ navigation }) {
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* Active bills */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Active bills</Text>
-        </View>
-
         {loading && (
           <View style={styles.center}>
             <ActivityIndicator size="small" color={SG.primary} />
-            <Text style={styles.centerText}>Loading active bills…</Text>
+            <Text style={styles.centerText}>Loading bills…</Text>
           </View>
         )}
 
@@ -196,20 +179,58 @@ export default function SplitGoHomeScreen({ navigation }) {
 
         {!loading && !error && bills.length === 0 && (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>No active bills</Text>
+            <Text style={styles.emptyTitle}>No bills yet</Text>
             <Text style={styles.emptySub}>
-              Bills you create or get added to will appear here while they're being settled.
+              Bills you create or get added to will appear here. Active ones stay
+              live with claim & payment progress; settled ones get archived below.
             </Text>
           </View>
         )}
 
-        {!loading && bills.map((b) => (
-          <BillCard key={b.billId} bill={b} onOpen={handleOpen} resuming={resumingId === b.billId} />
-        ))}
+        {/* Active bills */}
+        {!loading && active.length > 0 && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Active</Text>
+              <View style={[styles.countPill, styles.countPillActive]}>
+                <View style={styles.liveDot} />
+                <Text style={styles.countPillText}>{active.length} in flight</Text>
+              </View>
+            </View>
+            {active.map((b) => (
+              <BillCard
+                key={b.billId}
+                bill={b}
+                onOpen={handleOpen}
+                resuming={resumingId === b.billId}
+              />
+            ))}
+          </>
+        )}
+
+        {/* Settled / past bills */}
+        {!loading && settled.length > 0 && (
+          <>
+            <View style={[styles.sectionHeader, { marginTop: active.length > 0 ? 18 : 0 }]}>
+              <Text style={styles.sectionTitle}>Settled</Text>
+              <View style={styles.countPill}>
+                <Text style={styles.countPillText}>{settled.length}</Text>
+              </View>
+            </View>
+            {settled.map((b) => (
+              <BillCard
+                key={b.billId}
+                bill={b}
+                onOpen={handleOpen}
+                resuming={resumingId === b.billId}
+              />
+            ))}
+          </>
+        )}
 
         {!loading && bills.length > 0 && (
           <Text style={styles.footnote}>
-            Auto-refreshes every 5s · {bills.length} in flight
+            Auto-refreshes every 5s
           </Text>
         )}
       </ScrollView>
@@ -226,20 +247,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     position: 'relative',
   },
-  headerTitleWrap: {
-    alignItems: 'center', justifyContent: 'center',
-  },
+  headerTitleWrap: { alignItems: 'center', justifyContent: 'center' },
   iconBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   headerLeft:  { position: 'absolute', left: 0, top: 22 },
-  headerRight: { position: 'absolute', right: 0, top: 22 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800', letterSpacing: -0.3, textAlign: 'center' },
-  headerSub:   { color: 'rgba(255,255,255,0.78)', fontSize: 11, marginTop: 1, textAlign: 'center' },
-  historyBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
-  historyBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 80 },
@@ -274,14 +285,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 13, fontWeight: '800', color: SG.ink, letterSpacing: 0.2,
   },
-
-  liveBadge: {
+  countPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: SG.successSoft, paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 999,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
+    backgroundColor: SG.bg2 || '#EEF2F7',
   },
-  liveDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: SG.success },
-  liveText: { fontSize: 9, fontWeight: '800', color: SG.success, letterSpacing: 0.4 },
+  countPillActive: { backgroundColor: SG.successSoft },
+  countPillText:   { fontSize: 10, fontWeight: '800', color: SG.ink2, letterSpacing: 0.3 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: SG.success },
 
   center:     { paddingTop: 24, alignItems: 'center', gap: 8 },
   centerText: { fontSize: 12, color: SG.muted },
@@ -304,7 +315,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: SG.line, alignItems: 'center',
   },
   emptyTitle: { fontSize: 13, fontWeight: '700', color: SG.ink },
-  emptySub:   { fontSize: 11, color: SG.muted, textAlign: 'center', marginTop: 4, lineHeight: 16, maxWidth: 240 },
+  emptySub:   { fontSize: 11, color: SG.muted, textAlign: 'center', marginTop: 4, lineHeight: 16, maxWidth: 260 },
 
   footnote: { fontSize: 10, color: SG.muted, textAlign: 'center', marginTop: 12, lineHeight: 14 },
 });

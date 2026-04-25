@@ -482,16 +482,52 @@ export const handler = async (event) => {
       let paid = [...(r.Item.paid || [])].filter((n) => n !== participant);
       if (isPaid) paid.push(participant);
 
+      // Auto-close: once every non-creator participant has marked paid, seal
+      // the bill and emit closedAt so the client can route to the summary
+      // view. We also auto-distribute any unclaimed items so the math stays
+      // self-consistent (matches what `/close` does manually).
+      const nonCreator = (r.Item.participants || []).filter((n) => n !== r.Item.creator);
+      const allPaid = nonCreator.length > 0 && nonCreator.every((n) => paid.includes(n));
+
+      let claims  = r.Item.claims || {};
+      let status  = r.Item.status;
+      let closedAt = r.Item.closedAt || null;
+      let updateExpr = 'SET paid = :pd, transactions = :tx';
+      const exprValues = { ':pd': paid, ':tx': txns };
+      const exprNames  = {};
+
+      if (isPaid && allPaid) {
+        // Replicate /close: auto-distribute leftovers across the group
+        // (so totals reconcile if someone forgot to claim something).
+        const merged = { ...claims };
+        const everyone = r.Item.participants || [];
+        (r.Item.items || []).forEach((it) => {
+          if (!merged[it.id] || merged[it.id].length === 0) merged[it.id] = everyone;
+        });
+        claims  = merged;
+        status  = 'closed';
+        closedAt = Date.now();
+        updateExpr += ', claims = :c, #s = :s, closedAt = :ca';
+        exprValues[':c']  = claims;
+        exprValues[':s']  = status;
+        exprValues[':ca'] = closedAt;
+        exprNames['#s']   = 'status';
+      }
+
       await ddb.send(new UpdateCommand({
         TableName: TABLE,
         Key: { billId },
-        UpdateExpression: 'SET paid = :pd, transactions = :tx',
-        ExpressionAttributeValues: { ':pd': paid, ':tx': txns },
+        UpdateExpression: updateExpr,
+        ExpressionAttributeValues: exprValues,
+        ...(Object.keys(exprNames).length ? { ExpressionAttributeNames: exprNames } : {}),
       }));
       return ok({
         billId,
         paid,
-        transactions: txns,
+        status,
+        closedAt,
+        claims,
+        transactions:  txns,
         amount:        +amount.toFixed(2),
         payerBalance:  +payerBalance.toFixed(2),
         creatorBalance: +creatorBalance.toFixed(2),

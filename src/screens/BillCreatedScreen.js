@@ -103,6 +103,15 @@ export default function BillCreatedScreen({ navigation }) {
     return () => { cancelled = true; clearInterval(id); };
   }, [billId, billStatus, syncFromServer]);
 
+  // Auto-close handoff: when the server flips status to CLOSED (all
+  // non-creator participants paid up), drop into the Summary view instead
+  // of leaving the user on a stale "open" dashboard.
+  useEffect(() => {
+    if (billStatus !== BILL_STATUS.CLOSED) return;
+    const t = setTimeout(() => navigation.replace('Summary'), 600);
+    return () => clearTimeout(t);
+  }, [billStatus, navigation]);
+
   const CCY_SYMBOL = { MYR: 'RM', SGD: 'S$', THB: '฿', IDR: 'Rp', USD: '$', EUR: '€', CNY: '¥' };
   const sym = CCY_SYMBOL[(receiptMeta.currency || 'MYR').toUpperCase()] || 'RM';
 

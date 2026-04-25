@@ -49,18 +49,25 @@ const TABS = [
   { id: 'profile', label: 'Me',      Icon: ProfileIcon },
 ];
 
-export default function BottomNav({ active = 'home' }) {
+export default function BottomNav({ active = 'home', onScan }) {
   return (
     <View style={styles.bar}>
       {TABS.slice(0, 2).map(t => <Tab key={t.id} tab={t} active={active === t.id} />)}
 
-      {/* Centre scan button */}
-      <View style={styles.scanWrapper}>
+      {/* Centre scan button — taps simulate scanning a merchant QR (we skip
+          the camera step in the demo and jump straight to a successful payment
+          confirmation, which then offers a "Split with friends" CTA). */}
+      <TouchableOpacity
+        style={styles.scanWrapper}
+        onPress={onScan}
+        activeOpacity={0.85}
+        accessibilityLabel="Scan to pay"
+      >
         <View style={styles.scanCircle}>
           <ScanIcon />
         </View>
         <Text style={styles.scanLabel}>Scan</Text>
-      </View>
+      </TouchableOpacity>
 
       {TABS.slice(2).map(t => <Tab key={t.id} tab={t} active={active === t.id} />)}
     </View>

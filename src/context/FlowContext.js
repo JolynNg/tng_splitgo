@@ -365,6 +365,13 @@ export function FlowProvider({ children }) {
       if (!r.local) {
         if (Array.isArray(r.paid))         setPaid(r.paid);
         if (Array.isArray(r.transactions)) setTransactions(r.transactions);
+        // Server auto-closes the bill when every non-creator participant
+        // has paid; mirror that locally so the dashboard immediately flips
+        // to the "all paid" state without waiting for the next poll.
+        if (r.status === 'closed') {
+          setBillStatus(BILL_STATUS.CLOSED);
+          if (r.claims && typeof r.claims === 'object') setClaims(r.claims);
+        }
         // Update the signed-in user's wallet balance locally so the home
         // dashboard shows the new number without a separate refresh.
         if (me?.name === name && typeof r.payerBalance === 'number') {

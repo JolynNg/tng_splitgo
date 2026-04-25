@@ -314,7 +314,10 @@ export default function HomeScreen({ navigation }) {
         </View>
       </ScrollView>
 
-      <BottomNav active="home" />
+      <BottomNav
+        active="home"
+        onScan={() => navigation.navigate('PaymentSuccess', { merchant: 'Hot Pot Palace', amount: 480.00 })}
+      />
     </View>
   );
 }
