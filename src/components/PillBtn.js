@@ -9,20 +9,22 @@ const variants = {
   dark:    { bg: SG.ink,       color: '#fff',    border: 'transparent' },
 };
 
-export default function PillBtn({ children, variant = 'primary', onPress, style }) {
+export default function PillBtn({ children, variant = 'primary', onPress, style, disabled = false }) {
   const v = variants[variant];
   return (
     <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.8}
+      onPress={disabled ? undefined : onPress}
+      activeOpacity={disabled ? 1 : 0.8}
+      disabled={disabled}
       style={[
         styles.btn,
         { backgroundColor: v.bg, borderColor: v.border },
         variant === 'ghost' && styles.ghost,
+        disabled && styles.disabled,
         style,
       ]}
     >
-      <Text style={[styles.label, { color: v.color }]}>{children}</Text>
+      <Text style={[styles.label, { color: v.color }, disabled && styles.labelDisabled]}>{children}</Text>
     </TouchableOpacity>
   );
 }
@@ -42,5 +44,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: -0.1,
+  },
+  disabled: {
+    backgroundColor: SG.line2 || '#E5E7EB',
+    borderColor: 'transparent',
+  },
+  labelDisabled: {
+    color: SG.muted || '#9CA3AF',
   },
 });

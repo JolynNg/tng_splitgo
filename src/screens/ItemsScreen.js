@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
+  StyleSheet, StatusBar, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -9,20 +9,83 @@ import PillBtn from '../components/PillBtn';
 import ScreenHeader from '../components/ScreenHeader';
 import { SG } from '../tokens';
 import { useFlow } from '../context/FlowContext';
+import { categorizeItems } from '../api/categorize';
+import { translateItems, SUPPORTED_LANGS } from '../api/translate';
 
 const BLANK_DRAFT = { name: '', qty: '1', unit: '' };
 
+// AI category → display chip styling
+const CATEGORY_META = {
+  mains:   { label: 'Mains',   color: '#0066CC', bg: '#E6F2FA' },
+  drinks:  { label: 'Drinks',  color: '#0E9F6E', bg: '#E0F4EC' },
+  sides:   { label: 'Sides',   color: '#B8780F', bg: '#FFF4DC' },
+  dessert: { label: 'Dessert', color: '#C026D3', bg: '#FAEBFF' },
+  other:   { label: 'Other',   color: '#6B7280', bg: '#F3F4F6' },
+};
+
+const CCY_SYMBOL = { MYR: 'RM', SGD: 'S$', THB: '฿', IDR: 'Rp', USD: '$', EUR: '€', CNY: '¥' };
+
 export default function ItemsScreen({ navigation }) {
-  const { items, setItems, receiptMeta } = useFlow();
+  const {
+    items, setItems, receiptMeta,
+    categories, setCategories,
+    translations, setTranslations,
+  } = useFlow();
   const [editingId, setEditingId] = useState(null);  // id of item being edited, or 'new'
   const [draft, setDraft] = useState(BLANK_DRAFT);
 
+  // Language toggle state
+  const [activeLang, setActiveLang] = useState(null); // null = original
+  const [langLoading, setLangLoading] = useState(false);
+
+  const sym = CCY_SYMBOL[(receiptMeta.currency || 'MYR').toUpperCase()] || 'RM';
   const subtotal = items.reduce((s, i) => s + i.qty * i.unit, 0);
   const sst = receiptMeta.sst;
   const serviceCharge = receiptMeta.serviceCharge;
   const total = subtotal + (sst ?? 0) + (serviceCharge ?? 0);
   const restaurantName = receiptMeta.restaurant || 'Restaurant';
   const receiptDate = receiptMeta.date || null;
+
+  // ✦ Auto-categorise items via Qwen-Plus once on mount.
+  // Runs only when we have items but no cached categories yet.
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (Object.keys(categories).length > 0) return;
+    categorizeItems(items)
+      .then(cats => { if (cats && Object.keys(cats).length) setCategories(cats); })
+      .catch(err => console.warn('[AI] categorize failed:', err.message));
+  }, [items, categories, setCategories]);
+
+  // ✦ Translate item names on language toggle, with a per-language cache.
+  const handleLangToggle = async (lang) => {
+    if (langLoading) return;
+    if (lang === activeLang) {
+      setActiveLang(null);
+      return;
+    }
+    if (translations[lang]) {
+      setActiveLang(lang);
+      return;
+    }
+    setLangLoading(true);
+    try {
+      const map = await translateItems(items, lang);
+      if (map && Object.keys(map).length) {
+        setTranslations(prev => ({ ...prev, [lang]: map }));
+        setActiveLang(lang);
+      }
+    } catch (err) {
+      console.warn('[AI] translate failed:', err.message);
+    } finally {
+      setLangLoading(false);
+    }
+  };
+
+  // Display name for an item, respecting active language
+  const displayName = (it) => {
+    if (!activeLang) return it.name;
+    return translations[activeLang]?.[it.id] || it.name;
+  };
 
   // Open edit form for an existing item
   const openEdit = (it) => {
@@ -78,16 +141,12 @@ export default function ItemsScreen({ navigation }) {
       <SafeAreaView edges={['top']} style={{ backgroundColor: '#fff' }}>
         <ScreenHeader
           title="Review items"
-          subtitle={`AI extracted ${items.length} items from your receipt`}
-          onBack={() => navigation.goBack()}
-          right={
-            <View style={styles.badge}>
-              <Svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <Path d="M2 6l3 3 5-6" stroke={SG.success} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </Svg>
-              <Text style={styles.badgeText}>98%</Text>
-            </View>
+          subtitle={
+            Object.keys(categories).length
+              ? `${items.length} item${items.length === 1 ? '' : 's'} ready, sorted by category`
+              : `${items.length} item${items.length === 1 ? '' : 's'} pulled from your receipt`
           }
+          onBack={() => navigation.goBack()}
         />
       </SafeAreaView>
 
@@ -108,8 +167,30 @@ export default function ItemsScreen({ navigation }) {
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalAmt}>RM {total.toFixed(2)}</Text>
+            <Text style={styles.totalAmt}>{sym} {total.toFixed(2)}</Text>
           </View>
+        </View>
+
+        {/* Language toggle — Qwen-Plus translates item names on the fly */}
+        <View style={styles.langRow}>
+          <Text style={styles.langLabel}>View in</Text>
+          {SUPPORTED_LANGS.map(l => {
+            const active = activeLang === l.code;
+            return (
+              <TouchableOpacity
+                key={l.code}
+                onPress={() => handleLangToggle(l.code)}
+                disabled={langLoading}
+                style={[styles.langChip, active && styles.langChipActive]}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.langChipText, active && styles.langChipTextActive]}>
+                  {l.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          {langLoading && <ActivityIndicator size="small" color={SG.primary} style={{ marginLeft: 4 }} />}
         </View>
 
         {/* Items list */}
@@ -121,7 +202,10 @@ export default function ItemsScreen({ navigation }) {
             </TouchableOpacity>
           </View>
 
-          {items.map((it, i) => (
+          {items.map((it, i) => {
+            const cat = categories[it.id];
+            const meta = cat && CATEGORY_META[cat];
+            return (
             <View key={it.id}>
               {/* Item row */}
               <View style={[
@@ -133,10 +217,17 @@ export default function ItemsScreen({ navigation }) {
                   <Text style={styles.qtyText}>{it.qty}×</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>{it.name}</Text>
-                  <Text style={styles.itemUnit}>RM {it.unit.toFixed(2)} each</Text>
+                  <View style={styles.itemNameRow}>
+                    <Text style={styles.itemName}>{displayName(it)}</Text>
+                    {meta && (
+                      <View style={[styles.catChip, { backgroundColor: meta.bg }]}>
+                        <Text style={[styles.catChipText, { color: meta.color }]}>{meta.label}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.itemUnit}>{sym} {it.unit.toFixed(2)} each</Text>
                 </View>
-                <Text style={styles.itemTotal}>RM {(it.qty * it.unit).toFixed(2)}</Text>
+                <Text style={styles.itemTotal}>{sym} {(it.qty * it.unit).toFixed(2)}</Text>
                 <TouchableOpacity
                   onPress={() => editingId === it.id ? cancelEdit() : openEdit(it)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -218,7 +309,8 @@ export default function ItemsScreen({ navigation }) {
                 </View>
               )}
             </View>
-          ))}
+            );
+          })}
 
           {/* Add new item form inline */}
           {editingId === 'new' && (
@@ -250,7 +342,7 @@ export default function ItemsScreen({ navigation }) {
                   />
                 </View>
                 <View style={styles.editFieldMed}>
-                  <Text style={styles.editLabel}>Unit price (RM)</Text>
+                  <Text style={styles.editLabel}>Unit price ({sym})</Text>
                   <TextInput
                     style={styles.editInput}
                     value={draft.unit}
@@ -284,24 +376,24 @@ export default function ItemsScreen({ navigation }) {
         <View style={styles.totalsCard}>
           <View style={styles.totalRow}>
             <Text style={styles.totalRowLabel}>Subtotal</Text>
-            <Text style={styles.totalRowAmt}>RM {subtotal.toFixed(2)}</Text>
+            <Text style={styles.totalRowAmt}>{sym} {subtotal.toFixed(2)}</Text>
           </View>
           {sst != null && (
             <View style={styles.totalRow}>
               <Text style={styles.totalRowLabel}>SST</Text>
-              <Text style={styles.totalRowAmt}>RM {sst.toFixed(2)}</Text>
+              <Text style={styles.totalRowAmt}>{sym} {sst.toFixed(2)}</Text>
             </View>
           )}
           {serviceCharge != null && (
             <View style={styles.totalRow}>
               <Text style={styles.totalRowLabel}>Service charge</Text>
-              <Text style={styles.totalRowAmt}>RM {serviceCharge.toFixed(2)}</Text>
+              <Text style={styles.totalRowAmt}>{sym} {serviceCharge.toFixed(2)}</Text>
             </View>
           )}
           <View style={styles.totalDivider} />
           <View style={styles.totalRow}>
             <Text style={styles.grandLabel}>Total</Text>
-            <Text style={styles.grandAmt}>RM {total.toFixed(2)}</Text>
+            <Text style={styles.grandAmt}>{sym} {total.toFixed(2)}</Text>
           </View>
         </View>
 
@@ -309,7 +401,7 @@ export default function ItemsScreen({ navigation }) {
 
       <SafeAreaView edges={['bottom']} style={styles.footer}>
         <PillBtn onPress={() => navigation.navigate('Participants')}>
-          Continue · RM {total.toFixed(2)}
+          Continue · {sym} {total.toFixed(2)}
         </PillBtn>
       </SafeAreaView>
     </KeyboardAvoidingView>
@@ -362,9 +454,31 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   qtyText: { fontSize: 12, fontWeight: '700', color: SG.ink2 },
+  itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   itemName: { fontSize: 14, fontWeight: '600', color: SG.ink, letterSpacing: -0.1 },
   itemUnit: { fontSize: 11, color: SG.muted, marginTop: 1 },
   itemTotal: { fontSize: 14, fontWeight: '700', color: SG.ink },
+
+  // Category chip (AI-derived)
+  catChip: {
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+  },
+  catChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+
+  // Language toggle row
+  langRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 4, marginBottom: 10,
+  },
+  langLabel: { fontSize: 11, color: SG.muted, fontWeight: '600', marginRight: 2 },
+  langChip: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 999, backgroundColor: '#fff',
+    borderWidth: 1, borderColor: SG.line,
+  },
+  langChipActive: { backgroundColor: SG.primary, borderColor: SG.primary },
+  langChipText: { fontSize: 11, fontWeight: '700', color: SG.ink2 },
+  langChipTextActive: { color: '#fff' },
 
   // Edit form
   editForm: {

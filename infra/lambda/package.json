@@ -1,0 +1,13 @@
+{
+  "name": "splitgo-lambda",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.668.0",
+    "@aws-sdk/lib-dynamodb": "^3.668.0",
+    "@aws-sdk/client-s3": "^3.668.0",
+    "@aws-sdk/s3-request-presigner": "^3.668.0",
+    "@aws-sdk/client-sesv2": "^3.668.0"
+  }
+}

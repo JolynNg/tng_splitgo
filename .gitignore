@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Lambda deploy artefacts
+infra/lambda.zip
+infra/lambda/node_modules/

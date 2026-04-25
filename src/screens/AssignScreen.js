@@ -60,7 +60,7 @@ export default function AssignScreen({ navigation }) {
               <View key={p.name} style={styles.railCard}>
                 <TngAvatar size={32} />
                 <View>
-                  <Text style={styles.railName}>{p.name === 'You' ? 'You' : p.name.split(' ')[0]}</Text>
+                  <Text style={styles.railName}>{p.me ? 'You' : p.name.split(' ')[0]}</Text>
                   <Text style={[styles.railAmt, { color: amt > 0 ? SG.primary : SG.muted2 }]}>RM {amt.toFixed(2)}</Text>
                 </View>
               </View>
@@ -150,7 +150,7 @@ export default function AssignScreen({ navigation }) {
                         >
                           <TngAvatar size={22} onWhite={!on} />
                           <Text style={[styles.chipText, on && styles.chipTextActive]}>
-                            {p.name === 'You' ? 'You' : p.name.split(' ')[0]}
+                            {p.me ? 'You' : p.name.split(' ')[0]}
                           </Text>
                         </TouchableOpacity>
                       );

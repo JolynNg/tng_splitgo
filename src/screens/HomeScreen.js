@@ -1,12 +1,13 @@
 import React from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, StatusBar,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet, StatusBar, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import BottomNav from '../components/BottomNav';
 import { SG } from '../tokens';
+import { useAuth } from '../context/AuthContext';
 
 function TopAction({ label, children }) {
   return (
@@ -34,6 +35,35 @@ function Tile({ label, badge, onPress, children }) {
 }
 
 export default function HomeScreen({ navigation }) {
+  const { me, signOut, refreshMe } = useAuth();
+
+  // Pull the latest wallet balance every time the home screen comes back into
+  // view, so the headline number reflects payments made/received in SplitGo.
+  React.useEffect(() => {
+    refreshMe?.();
+    const id = setInterval(() => refreshMe?.(), 5000);
+    return () => clearInterval(id);
+  }, [refreshMe]);
+
+  const balance = typeof me?.balance === 'number' ? me.balance : 1000;
+  const balanceText = `RM ${balance.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Tap the avatar to log out — confirms first so we don't sign people out
+  // by accident when they meant to scroll up. The avatar shows the first
+  // letter of the signed-in user's name as a quick visual identity hint.
+  const handleProfilePress = () => {
+    Alert.alert(
+      `Signed in as ${me?.name || 'this device'}`,
+      'Sign out and return to the login screen?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign out', style: 'destructive', onPress: signOut },
+      ],
+    );
+  };
+
+  const initial = (me?.name || '?').trim()[0]?.toUpperCase() || '?';
+
   return (
     <View style={styles.screen}>
       <StatusBar barStyle="light-content" backgroundColor={SG.primary} />
@@ -53,13 +83,16 @@ export default function HomeScreen({ navigation }) {
               </Svg>
               <Text style={styles.searchText}>Search</Text>
             </View>
-            <View style={styles.avatarBtn}>
-              <Svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <Circle cx="9" cy="7" r="3" stroke="#fff" strokeWidth="1.5" />
-                <Path d="M3 15c1-3 3.5-4 6-4s5 1 6 4" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" />
-              </Svg>
+            <TouchableOpacity
+              style={styles.avatarBtn}
+              activeOpacity={0.75}
+              onPress={handleProfilePress}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityLabel="Profile · tap to sign out"
+            >
+              <Text style={styles.avatarInitial}>{initial}</Text>
               <View style={styles.avatarDot} />
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* Balance */}
@@ -68,7 +101,7 @@ export default function HomeScreen({ navigation }) {
               <Path d="M9 1l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V4l7-3z" stroke="#fff" strokeWidth="1.5" fill="rgba(255,255,255,0.18)" />
               <Path d="M6 9l2 2 4-4" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </Svg>
-            <Text style={styles.balance}>RM 1,284.50</Text>
+            <Text style={styles.balance}>{balanceText}</Text>
             <Svg width="18" height="18" viewBox="0 0 18 18" fill="none" style={{ opacity: 0.9 }}>
               <Path d="M1 9s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z" stroke="#fff" strokeWidth="1.4" />
               <Circle cx="9" cy="9" r="2.5" fill="#fff" />
@@ -212,7 +245,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recommended</Text>
           <View style={styles.tileRow}>
-            <Tile label="SplitGo" badge="NEW" onPress={() => navigation.navigate('Scan')}>
+            <Tile label="SplitGo" badge="NEW" onPress={() => navigation.navigate('SplitGoHome')}>
               <Svg width="40" height="40" viewBox="0 0 40 40" fill="none">
                 <Rect x="7" y="5" width="18" height="24" rx="2" fill="#fff" stroke={SG.primary} strokeWidth="1.8" />
                 <Path d="M11 11h10M11 15h10M11 19h7" stroke={SG.primary} strokeWidth="1.6" strokeLinecap="round" />
@@ -306,6 +339,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center', justifyContent: 'center',
   },
+  avatarInitial: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: -0.3 },
   avatarDot: {
     position: 'absolute', bottom: 2, right: 2,
     width: 10, height: 10, borderRadius: 5,
