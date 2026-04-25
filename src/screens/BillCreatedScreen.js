@@ -112,6 +112,18 @@ export default function BillCreatedScreen({ navigation }) {
     return () => clearTimeout(t);
   }, [billStatus, navigation]);
 
+  // The moment everyone except the creator has marked paid, finalise the bill
+  // locally and on the server. closeBill() is idempotent — if the server has
+  // already auto-closed it from the /paid call, /close returns 409 and we
+  // silently keep the local closed state. Either way the dashboard flips to
+  // CLOSED instantly so the auto-navigate useEffect above can take over.
+  useEffect(() => {
+    if (!billId || !viewerIsCreator) return;
+    if (billStatus !== BILL_STATUS.OPEN) return;
+    if (!allOthersPaid) return;
+    closeBill();
+  }, [billId, viewerIsCreator, billStatus, allOthersPaid, closeBill]);
+
   const CCY_SYMBOL = { MYR: 'RM', SGD: 'S$', THB: '฿', IDR: 'Rp', USD: '$', EUR: '€', CNY: '¥' };
   const sym = CCY_SYMBOL[(receiptMeta.currency || 'MYR').toUpperCase()] || 'RM';
 
@@ -710,7 +722,7 @@ export default function BillCreatedScreen({ navigation }) {
           </Svg>
           <Text style={styles.tipText}>
             {viewerIsCreator
-              ? 'Wait for everyone to be Ready. Once all friends mark Paid you can close & settle.'
+              ? 'The bill settles automatically the moment your last friend pays — nothing to press.'
               : everyoneReady
                 ? `${billCreator} is collecting. Pay your share to settle.`
                 : 'Tap items you had, then mark yourself Ready. The Pay button unlocks once everyone is Ready.'}
@@ -746,15 +758,26 @@ export default function BillCreatedScreen({ navigation }) {
           </>
         ) : viewerIsCreator ? (
           <>
-            <PillBtn onPress={handleClose} disabled={!allOthersPaid && !allClaimed}>
-              {allOthersPaid
-                ? 'Close & settle'
-                : `Waiting for friends to pay (${paidCount}/${nonCreatorNames.length})`}
-            </PillBtn>
+            {allOthersPaid ? (
+              <View style={styles.autoSettling}>
+                <ActivityIndicator size="small" color={SG.success} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoSettlingTitle}>All friends paid · settling automatically</Text>
+                  <Text style={styles.autoSettlingSub}>Taking you to the receipt…</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.waitingPill}>
+                <View style={styles.waitingDot} />
+                <Text style={styles.waitingText}>
+                  Waiting for friends to pay  ·  {paidCount}/{nonCreatorNames.length} settled
+                </Text>
+              </View>
+            )}
             {!allOthersPaid && (
               <TouchableOpacity onPress={handleForceClose} activeOpacity={0.7} style={styles.escapeHatch}>
                 <Text style={styles.escapeHatchText}>
-                  Settle without waiting?  <Text style={styles.escapeHatchLink}>Close anyway →</Text>
+                  Friends taking forever?  <Text style={styles.escapeHatchLink}>Force close →</Text>
                 </Text>
               </TouchableOpacity>
             )}
@@ -1136,6 +1159,43 @@ const styles = StyleSheet.create({
   },
   escapeHatchLink: {
     color: SG.primary, fontWeight: '700',
+  },
+
+  autoSettling: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: SG.successSoft,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  autoSettlingTitle: {
+    fontSize: 14, fontWeight: '800', color: SG.success, letterSpacing: -0.2,
+  },
+  autoSettlingSub: {
+    fontSize: 11, color: SG.success, marginTop: 2, opacity: 0.85,
+  },
+
+  waitingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: SG.bg,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: SG.line,
+  },
+  waitingDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: SG.accent,
+  },
+  waitingText: {
+    fontSize: 13, fontWeight: '700', color: SG.ink2, letterSpacing: -0.1,
   },
 
   modalBg: { flex: 1, backgroundColor: '#000' },
