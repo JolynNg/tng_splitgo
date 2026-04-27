@@ -6,7 +6,7 @@ set -euo pipefail
 
 if [ -z "${1:-}" ]; then
   echo "Usage: ./test.sh <invoke-url>"
-  echo "e.g.    ./test.sh https://abc123.execute-api.ap-southeast-5.amazonaws.com"
+  echo "e.g.    ./test.sh https://abc123.execute-api.ap-southeast-1.amazonaws.com"
   exit 1
 fi
 

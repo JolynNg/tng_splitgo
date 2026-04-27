@@ -125,7 +125,11 @@ export default function BillCreatedScreen({ navigation }) {
   }, [billId, viewerIsCreator, billStatus, allOthersPaid, closeBill]);
 
   const CCY_SYMBOL = { MYR: 'RM', SGD: 'S$', THB: '฿', IDR: 'Rp', USD: '$', EUR: '€', CNY: '¥' };
-  const sym = CCY_SYMBOL[(receiptMeta.currency || 'MYR').toUpperCase()] || 'RM';
+  // If we have sourceCurrency metadata, scan-time FX conversion already
+  // normalized item prices into MYR, so all live totals on this screen should
+  // render in RM regardless of the original receipt currency.
+  const displayCurrency = receiptMeta?.sourceCurrency ? 'MYR' : (receiptMeta?.currency || 'MYR').toUpperCase();
+  const sym = CCY_SYMBOL[displayCurrency] || 'RM';
 
   const handleShare = async () => {
     if (!shareLink) return;
@@ -390,7 +394,7 @@ export default function BillCreatedScreen({ navigation }) {
               ? 'Waiting for friends to claim their items'
               : `${billCreator || 'Host'} is collecting · you can watch progress here`
           }
-          onBack={() => navigation.navigate('SplitGoHome')}
+          onBack={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('SplitGoHome'))}
         />
       </SafeAreaView>
 
@@ -695,7 +699,8 @@ export default function BillCreatedScreen({ navigation }) {
                   .slice()
                   .sort((a, b) => (b.at || 0) - (a.at || 0))
                   .map((t, idx) => {
-                    const symFor = CCY_SYMBOL[(t.currency || receiptMeta.currency || 'MYR').toUpperCase()] || sym;
+                    const txCcy = (t.currency || displayCurrency || 'MYR').toUpperCase();
+                    const symFor = CCY_SYMBOL[txCcy] || sym;
                     const when = t.at ? new Date(t.at) : null;
                     const whenStr = when
                       ? when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -730,7 +735,7 @@ export default function BillCreatedScreen({ navigation }) {
         </View>
 
         {/* Creator-only: cancel a bill created by mistake */}
-        {viewerIsCreator && billStatus === BILL_STATUS.OPEN && (
+        {isCreatorDevice && billStatus === BILL_STATUS.OPEN && (
           <TouchableOpacity onPress={handleCancelBill} activeOpacity={0.7} style={styles.cancelLink}>
             <Text style={styles.cancelLinkText}>Created by mistake?  <Text style={styles.cancelLinkAction}>Cancel this bill</Text></Text>
           </TouchableOpacity>

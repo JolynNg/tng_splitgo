@@ -21,7 +21,7 @@ Single-command deployment of the entire AWS backend, plus the Alibaba Cloud AI h
 - AWS CLI configured (`aws configure`)
 - Node.js 18+ (for `npm install` inside `lambda/`)
 - Alibaba Cloud Model Studio API key in `../.env` as `EXPO_PUBLIC_DASHSCOPE_API_KEY`
-- The `ap-southeast-5` (Malaysia) region enabled on your AWS account
+- Default region is **`ap-southeast-1` (Singapore)**. For Malaysia instead, run with `AWS_REGION=ap-southeast-5 ./deploy.sh`.
 
 ## One-command deploy
 
@@ -35,7 +35,7 @@ The script is idempotent — re-run any time to push code changes.
 ## Test the deployed API
 
 ```bash
-./test.sh https://YOUR-API-ID.execute-api.ap-southeast-5.amazonaws.com
+./test.sh https://YOUR-API-ID.execute-api.ap-southeast-1.amazonaws.com
 ```
 
 This hits every route end-to-end and prints the responses.
@@ -54,16 +54,16 @@ This hits every route end-to-end and prints the responses.
 ```bash
 cd infra/lambda
 zip -qr ../lambda.zip . -x "*.git*"
-aws lambda update-function-code --region ap-southeast-5 \
+aws lambda update-function-code --region ap-southeast-1 \
   --function-name splitgo-api --zip-file fileb://../lambda.zip
 ```
 
 ## Tearing it down
 
 ```bash
-aws lambda delete-function --region ap-southeast-5 --function-name splitgo-api
-aws apigatewayv2 delete-api --region ap-southeast-5 --api-id $(aws apigatewayv2 get-apis --region ap-southeast-5 --query "Items[?Name=='splitgo'].ApiId" --output text)
-aws dynamodb delete-table --region ap-southeast-5 --table-name SplitGoBills
+aws lambda delete-function --region ap-southeast-1 --function-name splitgo-api
+aws apigatewayv2 delete-api --region ap-southeast-1 --api-id $(aws apigatewayv2 get-apis --region ap-southeast-1 --query "Items[?Name=='splitgo'].ApiId" --output text)
+aws dynamodb delete-table --region ap-southeast-1 --table-name SplitGoBills
 aws s3 rb s3://splitgo-receipts-$(aws sts get-caller-identity --query Account --output text) --force
 aws iam delete-role-policy --role-name splitgo-lambda-role --policy-name splitgo-lambda-policy
 aws iam delete-role --role-name splitgo-lambda-role

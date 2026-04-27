@@ -30,6 +30,7 @@ export default function ItemsScreen({ navigation }) {
     items, setItems, receiptMeta,
     categories, setCategories,
     translations, setTranslations,
+    travelBillMeta, createBillGroup,
   } = useFlow();
   const [editingId, setEditingId] = useState(null);  // id of item being edited, or 'new'
   const [draft, setDraft] = useState(BLANK_DRAFT);
@@ -37,14 +38,60 @@ export default function ItemsScreen({ navigation }) {
   // Language toggle state
   const [activeLang, setActiveLang] = useState(null); // null = original
   const [langLoading, setLangLoading] = useState(false);
+  const [creatingBill, setCreatingBill] = useState(false);
 
-  const sym = CCY_SYMBOL[(receiptMeta.currency || 'MYR').toUpperCase()] || 'RM';
+  const rmSym = CCY_SYMBOL.MYR;
+  const sourceCurrency = (receiptMeta.sourceCurrency || '').toUpperCase();
+  const sourceSym = sourceCurrency ? (CCY_SYMBOL[sourceCurrency] || sourceCurrency) : null;
+  const displayCurrency = sourceCurrency || (receiptMeta.currency || 'MYR').toUpperCase();
+  const sym = sourceSym || (CCY_SYMBOL[displayCurrency] || 'RM');
   const subtotal = items.reduce((s, i) => s + i.qty * i.unit, 0);
   const sst = receiptMeta.sst;
   const serviceCharge = receiptMeta.serviceCharge;
   const total = subtotal + (sst ?? 0) + (serviceCharge ?? 0);
+  const sourceSubtotal = sourceCurrency
+    ? items.reduce((s, i) => s + i.qty * (Number(i.sourceUnit ?? i.unit) || 0), 0)
+    : null;
+  const sourceSst = sourceCurrency ? Number(receiptMeta.sourceSst ?? 0) : null;
+  const sourceServiceCharge = sourceCurrency ? Number(receiptMeta.sourceServiceCharge ?? 0) : null;
+  const sourceTotal = sourceCurrency
+    ? sourceSubtotal + (sourceSst ?? 0) + (sourceServiceCharge ?? 0)
+    : null;
   const restaurantName = receiptMeta.restaurant || 'Restaurant';
   const receiptDate = receiptMeta.date || null;
+
+  const isTravelReceipt = Boolean(travelBillMeta?.travelGroupId);
+  const travelRosterOk = isTravelReceipt && (travelBillMeta?.travelParticipantNames || []).length > 0;
+
+  const onContinueFromItems = async () => {
+    if (isTravelReceipt && travelRosterOk) {
+      setCreatingBill(true);
+      try {
+        await createBillGroup();
+        const hub = {
+          name: 'TravelGroupHub',
+          params: {
+            travelGroupId: travelBillMeta.travelGroupId,
+            travelGroupName: travelBillMeta.travelGroupName || 'Trip',
+            participantNames: travelBillMeta.travelParticipantNames || [],
+          },
+        };
+        navigation.reset({
+          index: 3,
+          routes: [
+            { name: 'SplitGoHome' },
+            { name: 'TravelGroups' },
+            hub,
+            { name: 'BillCreated' },
+          ],
+        });
+      } finally {
+        setCreatingBill(false);
+      }
+      return;
+    }
+    navigation.navigate('Participants');
+  };
 
   // ✦ Auto-categorise items via Qwen-Plus once on mount.
   // Runs only when we have items but no cached categories yet.
@@ -225,9 +272,22 @@ export default function ItemsScreen({ navigation }) {
                       </View>
                     )}
                   </View>
-                  <Text style={styles.itemUnit}>{sym} {it.unit.toFixed(2)} each</Text>
+                  <Text style={styles.itemUnit}>
+                    {sourceCurrency
+                      ? `${sourceSym} ${(Number(it.sourceUnit ?? it.unit) || 0).toFixed(2)} each`
+                      : `${sym} ${it.unit.toFixed(2)} each`}
+                  </Text>
+                  {sourceCurrency ? (
+                    <Text style={styles.itemUnitConverted}>
+                      ≈ {rmSym} {it.unit.toFixed(2)} each
+                    </Text>
+                  ) : null}
                 </View>
-                <Text style={styles.itemTotal}>{sym} {(it.qty * it.unit).toFixed(2)}</Text>
+                <Text style={styles.itemTotal}>
+                  {sourceCurrency
+                    ? `${sourceSym} ${(it.qty * (Number(it.sourceUnit ?? it.unit) || 0)).toFixed(2)}`
+                    : `${sym} ${(it.qty * it.unit).toFixed(2)}`}
+                </Text>
                 <TouchableOpacity
                   onPress={() => editingId === it.id ? cancelEdit() : openEdit(it)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -244,6 +304,13 @@ export default function ItemsScreen({ navigation }) {
                   )}
                 </TouchableOpacity>
               </View>
+              {sourceCurrency ? (
+                <View style={styles.convertedLineWrap}>
+                  <Text style={styles.convertedLineText}>
+                    Converted: {rmSym} {(it.qty * it.unit).toFixed(2)}
+                  </Text>
+                </View>
+              ) : null}
 
               {/* Inline edit form */}
               {editingId === it.id && (
@@ -374,34 +441,78 @@ export default function ItemsScreen({ navigation }) {
 
         {/* Totals — live update */}
         <View style={styles.totalsCard}>
+          {sourceCurrency && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalRowLabel}>Original total ({sourceCurrency})</Text>
+              <Text style={styles.totalRowAmt}>{sourceSym} {Number(sourceTotal || 0).toFixed(2)}</Text>
+            </View>
+          )}
+          {sourceCurrency && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalRowLabel}>Converted total (MYR)</Text>
+              <Text style={styles.totalRowAmt}>{rmSym} {total.toFixed(2)}</Text>
+            </View>
+          )}
           <View style={styles.totalRow}>
             <Text style={styles.totalRowLabel}>Subtotal</Text>
-            <Text style={styles.totalRowAmt}>{sym} {subtotal.toFixed(2)}</Text>
+            <Text style={styles.totalRowAmt}>
+              {sourceCurrency
+                ? `${sourceSym} ${Number(sourceSubtotal || 0).toFixed(2)}`
+                : `${sym} ${subtotal.toFixed(2)}`}
+            </Text>
           </View>
           {sst != null && (
             <View style={styles.totalRow}>
               <Text style={styles.totalRowLabel}>SST</Text>
-              <Text style={styles.totalRowAmt}>{sym} {sst.toFixed(2)}</Text>
+              <Text style={styles.totalRowAmt}>
+                {sourceCurrency
+                  ? `${sourceSym} ${Number(sourceSst || 0).toFixed(2)}`
+                  : `${sym} ${sst.toFixed(2)}`}
+              </Text>
             </View>
           )}
           {serviceCharge != null && (
             <View style={styles.totalRow}>
               <Text style={styles.totalRowLabel}>Service charge</Text>
-              <Text style={styles.totalRowAmt}>{sym} {serviceCharge.toFixed(2)}</Text>
+              <Text style={styles.totalRowAmt}>
+                {sourceCurrency
+                  ? `${sourceSym} ${Number(sourceServiceCharge || 0).toFixed(2)}`
+                  : `${sym} ${serviceCharge.toFixed(2)}`}
+              </Text>
             </View>
           )}
           <View style={styles.totalDivider} />
           <View style={styles.totalRow}>
             <Text style={styles.grandLabel}>Total</Text>
-            <Text style={styles.grandAmt}>{sym} {total.toFixed(2)}</Text>
+            <Text style={styles.grandAmt}>
+              {sourceCurrency
+                ? `${sourceSym} ${Number(sourceTotal || 0).toFixed(2)}`
+                : `${sym} ${total.toFixed(2)}`}
+            </Text>
           </View>
+          {sourceCurrency && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalRowLabel}>Will settle in</Text>
+              <Text style={styles.totalRowAmt}>{rmSym} {total.toFixed(2)}</Text>
+            </View>
+          )}
         </View>
 
       </ScrollView>
 
       <SafeAreaView edges={['bottom']} style={styles.footer}>
-        <PillBtn onPress={() => navigation.navigate('Participants')}>
-          Continue · {sym} {total.toFixed(2)}
+        <PillBtn onPress={onContinueFromItems} disabled={creatingBill}>
+          {creatingBill ? (
+            <ActivityIndicator color="#fff" />
+          ) : isTravelReceipt ? (
+            sourceCurrency
+              ? `Create bill · ${sourceSym} ${Number(sourceTotal || 0).toFixed(2)} (settle ${rmSym} ${total.toFixed(2)})`
+              : `Create bill · ${sym} ${total.toFixed(2)}`
+          ) : (
+            sourceCurrency
+              ? `Continue · ${sourceSym} ${Number(sourceTotal || 0).toFixed(2)} (settle ${rmSym} ${total.toFixed(2)})`
+              : `Continue · ${sym} ${total.toFixed(2)}`
+          )}
         </PillBtn>
       </SafeAreaView>
     </KeyboardAvoidingView>
@@ -457,7 +568,10 @@ const styles = StyleSheet.create({
   itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   itemName: { fontSize: 14, fontWeight: '600', color: SG.ink, letterSpacing: -0.1 },
   itemUnit: { fontSize: 11, color: SG.muted, marginTop: 1 },
+  itemUnitConverted: { fontSize: 11, color: SG.primary, marginTop: 2, fontWeight: '600' },
   itemTotal: { fontSize: 14, fontWeight: '700', color: SG.ink },
+  convertedLineWrap: { paddingHorizontal: 54, paddingBottom: 8 },
+  convertedLineText: { fontSize: 11, color: SG.primary, fontWeight: '600' },
 
   // Category chip (AI-derived)
   catChip: {

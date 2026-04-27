@@ -3,6 +3,7 @@ import { RECEIPT_ITEMS } from '../data';
 import { SG } from '../tokens';
 import { useAuth } from './AuthContext';
 import * as billService from '../api/billService';
+import { upsertTrip } from '../api/tripService';
 
 const FlowContext = createContext(null);
 
@@ -87,6 +88,10 @@ export function FlowProvider({ children }) {
   // When non-null, takes precedence over `selected` for the participants list.
   // Set when a bill is hydrated from history (the server is the source of truth).
   const [loadedParticipants, setLoadedParticipants] = useState(null);
+
+  // Travel trip: next receipt scan is tagged with this group + roster is prefilled.
+  const [travelBillMeta, setTravelBillMetaState] = useState(null);
+  // { travelGroupId, travelGroupName, travelParticipantNames: string[] }
 
   const participants = useMemo(() => {
     if (!me) return [];
@@ -199,12 +204,26 @@ export function FlowProvider({ children }) {
     setTransactions([]);
     setBillCreatedAt(Date.now());
     setBillCreator(me?.name || null);
+    const meta = {
+      ...receiptMeta,
+      ...(travelBillMeta?.travelGroupId
+        ? {
+            travelGroupId: travelBillMeta.travelGroupId,
+            travelGroupName: travelBillMeta.travelGroupName || '',
+          }
+        : {}),
+    };
+    // Travel hub passes the full roster up front — use it so we can create the
+    // bill from Items without visiting Participants (selected may still be []).
+    const rosterNames = travelBillMeta?.travelParticipantNames?.length
+      ? [...travelBillMeta.travelParticipantNames]
+      : participants.map((p) => p.name);
     try {
       const res = await billService.createBill({
         creator: me?.name,
         items,
-        participants: participants.map(p => p.name),
-        receiptMeta,
+        participants: rosterNames,
+        receiptMeta: meta,
         receiptKey,
         // Don't persist `receiptUrl` — it's either a base64 data: URL (too big
         // for a DynamoDB item) or a 1h pre-signed S3 URL (expires). Lambda
@@ -219,9 +238,25 @@ export function FlowProvider({ children }) {
     setBillStatus(BILL_STATUS.OPEN);
     // Keep roster in sync immediately so the dashboard / close logic don't wait
     // for the first GET poll.
-    setLoadedParticipants(participants.map(p => p.name));
+    setLoadedParticipants(rosterNames);
+    if (travelBillMeta?.travelParticipantNames?.length && me?.name) {
+      setSelected(rosterNames.filter((n) => n !== me.name));
+    }
+    if (travelBillMeta?.travelGroupId && me?.name) {
+      // Upsert the trip on the server so any new participants picked up from
+      // the receipt scan flow (Items → Continue) propagate to every other
+      // member's lobby on next refresh. Fire-and-forget — the bill itself was
+      // already created above, so a transient trip-API hiccup shouldn't block
+      // the user. Any genuine outage will surface on the lobby's error banner.
+      upsertTrip({
+        creator: me.name,
+        travelGroupId: travelBillMeta.travelGroupId,
+        travelGroupName: travelBillMeta.travelGroupName || 'Trip',
+        participantNames: rosterNames,
+      }).catch((err) => console.warn('[SplitGo] upsertTrip:', err.message));
+    }
     return id;
-  }, [items, participants, receiptMeta, receiptKey, receiptUrl, me?.name]);
+  }, [items, participants, receiptMeta, receiptKey, receiptUrl, me?.name, travelBillMeta, setSelected]);
 
   // Merge the latest server snapshot of the bill into local state.
   // Used by polling on BillCreatedScreen / ClaimScreen so multiple devices stay in sync.
@@ -241,8 +276,17 @@ export function FlowProvider({ children }) {
   // Used when the user re-enters a bill from the History list — we don't have
   // the in-memory state any more (they may have closed and re-opened the app),
   // so we re-build it from DynamoDB.
+  const setTravelBillMeta = useCallback((meta) => {
+    setTravelBillMetaState(meta && meta.travelGroupId ? meta : null);
+  }, []);
+
+  const clearTravelBillMeta = useCallback(() => {
+    setTravelBillMetaState(null);
+  }, []);
+
   const loadBillFromServer = useCallback((serverBill) => {
     if (!serverBill || serverBill.local) return;
+    setTravelBillMetaState(null);
     setBillId(serverBill.billId);
     const incoming = serverBill.status;
     setBillStatus(
@@ -258,11 +302,18 @@ export function FlowProvider({ children }) {
     setPaid(Array.isArray(serverBill.paid)   ? [...serverBill.paid]  : []);
     setTransactions(Array.isArray(serverBill.transactions) ? [...serverBill.transactions] : []);
     setReceiptMeta({
-      restaurant:    serverBill.receiptMeta?.restaurant ?? null,
-      date:          serverBill.receiptMeta?.date ?? null,
-      sst:           serverBill.receiptMeta?.sst ?? null,
-      serviceCharge: serverBill.receiptMeta?.serviceCharge ?? null,
-      currency:      serverBill.receiptMeta?.currency ?? 'MYR',
+      restaurant:          serverBill.receiptMeta?.restaurant ?? null,
+      date:                serverBill.receiptMeta?.date ?? null,
+      sst:                 serverBill.receiptMeta?.sst ?? null,
+      serviceCharge:       serverBill.receiptMeta?.serviceCharge ?? null,
+      currency:            serverBill.receiptMeta?.currency ?? 'MYR',
+      // Preserve FX fields so BillCreatedScreen can render the correct
+      // currency symbol (RM if conversion happened, otherwise the original).
+      sourceCurrency:      serverBill.receiptMeta?.sourceCurrency ?? null,
+      sourceSst:           serverBill.receiptMeta?.sourceSst ?? null,
+      sourceServiceCharge: serverBill.receiptMeta?.sourceServiceCharge ?? null,
+      fxRateToMyr:         serverBill.receiptMeta?.fxRateToMyr ?? null,
+      fxDate:              serverBill.receiptMeta?.fxDate ?? null,
     });
     setReceiptKey(serverBill.receiptKey || null);
     setReceiptUrl(serverBill.receiptUrl || null);
@@ -389,6 +440,10 @@ export function FlowProvider({ children }) {
 
   const cancelBillRemote = useCallback(async () => {
     if (!billId || !me?.name) return;
+    // Owner-only guard on client side (backend enforces again).
+    if (billCreator && me.name !== billCreator) {
+      throw new Error('Only the receipt owner can cancel this bill.');
+    }
     setBillStatus(BILL_STATUS.CANCELLED);
     try {
       await billService.cancelBill(billId, { actor: me.name });
@@ -396,7 +451,7 @@ export function FlowProvider({ children }) {
       console.warn('[SplitGo] cancelBill:', err.message);
       throw err;
     }
-  }, [billId, me?.name]);
+  }, [billId, me?.name, billCreator]);
 
   const updateBillParticipants = useCallback(async ({ add = [], remove = [] }) => {
     if (!billId || !me?.name) return;
@@ -459,6 +514,7 @@ export function FlowProvider({ children }) {
     setCategories({});
     setTranslations({});
     setLoadedParticipants(null);
+    setTravelBillMetaState(null);
   }, [me?.name]);
 
   const shareLink = billId ? `https://splitgo.app/b/${billId}` : null;
@@ -481,6 +537,7 @@ export function FlowProvider({ children }) {
       // bill session
       billId, billStatus, billCreatedAt, billCreator, shareLink,
       billParticipantNames,
+      travelBillMeta, setTravelBillMeta, clearTravelBillMeta,
       createBillGroup, closeBill, resetFlow, syncFromServer, loadBillFromServer,
       leaveBill, updateBillParticipants,
       // two-phase settlement + wallet ledger

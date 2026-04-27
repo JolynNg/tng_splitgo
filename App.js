@@ -20,6 +20,11 @@ import SummaryScreen from './src/screens/SummaryScreen';
 import RequestScreen from './src/screens/RequestScreen';
 import SettledScreen from './src/screens/SettledScreen';
 import PaymentSuccessScreen from './src/screens/PaymentSuccessScreen';
+import SplitBillModeScreen from './src/screens/SplitBillModeScreen';
+import TravelGroupsLobbyScreen from './src/screens/TravelGroupsLobbyScreen';
+import TravelPickContactsScreen from './src/screens/TravelPickContactsScreen';
+import TravelTripNameScreen from './src/screens/TravelTripNameScreen';
+import TravelGroupHubScreen from './src/screens/TravelGroupHubScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -55,6 +60,11 @@ function AuthGate() {
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Home"           component={HomeScreen} />
           <Stack.Screen name="PaymentSuccess" component={PaymentSuccessScreen} />
+          <Stack.Screen name="SplitBillMode"  component={SplitBillModeScreen} />
+          <Stack.Screen name="TravelGroups" component={TravelGroupsLobbyScreen} />
+          <Stack.Screen name="TravelPickContacts" component={TravelPickContactsScreen} />
+          <Stack.Screen name="TravelTripName" component={TravelTripNameScreen} />
+          <Stack.Screen name="TravelGroupHub" component={TravelGroupHubScreen} />
           <Stack.Screen name="SplitGoHome"    component={SplitGoHomeScreen} />
           <Stack.Screen name="Scan"         component={ScanScreen} />
           <Stack.Screen name="Items"        component={ItemsScreen} />

@@ -15,24 +15,37 @@
 const AWS_API_URL = process.env.EXPO_PUBLIC_AWS_API_URL;
 const isCloudEnabled = () => Boolean(AWS_API_URL);
 
-// Hardcoded fallback used when the cloud isn't configured. Mirrors the seed
-// contacts in deploy.sh so the offline experience matches "live mode".
+// Hardcoded fallback when the cloud isn't configured. Keep in sync with
+// deploy.sh seed contacts (first deploy of an empty SplitGoContacts table).
 const STARTING_BALANCE = 1000;
 const FALLBACK_CONTACTS = [
-  { contactId: 'CT-local-aisyah', name: 'Aisyah Rahman', phone: '+60123456789', color: '#0070BA', balance: STARTING_BALANCE, createdAt: 0 },
-  { contactId: 'CT-local-marcus', name: 'Marcus Tan',    phone: '+60173456789', color: '#7AC74F', balance: STARTING_BALANCE, createdAt: 0 },
-  { contactId: 'CT-local-priya',  name: 'Priya Nair',    phone: '+60195501234', color: '#F5A623', balance: STARTING_BALANCE, createdAt: 0 },
-  { contactId: 'CT-local-daniel', name: 'Daniel Lim',    phone: '+60167008822', color: '#E63946', balance: STARTING_BALANCE, createdAt: 0 },
-  { contactId: 'CT-local-jolynn', name: 'Jolynn Tan',    phone: '+60112345678', color: '#9B5DE5', balance: STARTING_BALANCE, createdAt: 0 },
-];
+  { contactId: 'CT-local-javon',     name: 'Javon',     phone: '+60145246924', color: '#0070BA', balance: STARTING_BALANCE, createdAt: 0 },
+  { contactId: 'CT-local-bc',        name: 'BC',        phone: '+60124523653', color: '#7AC74F', balance: STARTING_BALANCE, createdAt: 0 },
+  { contactId: 'CT-local-kenny',     name: 'Kenny',     phone: '+60167745723', color: '#F5A623', balance: STARTING_BALANCE, createdAt: 0 },
+  { contactId: 'CT-local-ashley',    name: 'Ashley',    phone: '+60172346924', color: '#E63946', balance: STARTING_BALANCE, createdAt: 0 },
+  { contactId: 'CT-local-christina', name: 'Christina', phone: '+60119482529', color: '#9B5DE5', balance: STARTING_BALANCE, createdAt: 0 },
+  { contactId: 'CT-local-yen',       name: 'Yen',       phone: '+60182463561', color: '#00B4D8', balance: STARTING_BALANCE, createdAt: 0 },
+].sort((a, b) => a.name.localeCompare(b.name));
 
 async function callApi(path, opts = {}) {
-  const url = `${AWS_API_URL.replace(/\/$/, '')}${path}`;
-  const r = await fetch(url, {
-    method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const base = AWS_API_URL.replace(/\/$/, '');
+  const url = `${base}${path}`;
+  let r;
+  try {
+    r = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/network request failed/i.test(msg)) {
+      throw new Error(
+        `${msg} — cannot reach ${base}. Re-run \`cd infra && ./deploy.sh\` (it updates .env), confirm Wi‑Fi/VPN, then \`npx expo start --clear\`.`,
+      );
+    }
+    throw e;
+  }
   if (!r.ok) throw new Error(`AWS API ${path} ${r.status}: ${await r.text()}`);
   return r.json();
 }

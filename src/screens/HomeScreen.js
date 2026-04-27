@@ -245,7 +245,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recommended</Text>
           <View style={styles.tileRow}>
-            <Tile label="SplitGo" badge="NEW" onPress={() => navigation.navigate('SplitGoHome')}>
+            <Tile label="SplitGo" badge="NEW" onPress={() => navigation.navigate('SplitBillMode')}>
               <Svg width="40" height="40" viewBox="0 0 40 40" fill="none">
                 <Rect x="7" y="5" width="18" height="24" rx="2" fill="#fff" stroke={SG.primary} strokeWidth="1.8" />
                 <Path d="M11 11h10M11 15h10M11 19h7" stroke={SG.primary} strokeWidth="1.6" strokeLinecap="round" />

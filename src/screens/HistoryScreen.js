@@ -126,7 +126,7 @@ export default function HistoryScreen({ navigation }) {
           </View>
         )}
 
-        {!loading && !error && bills.length === 0 && (
+        {!loading && !error && bills.filter(b => !b.travelGroupId).length === 0 && (
           <View style={styles.empty}>
             <View style={styles.emptyIcon}>
               <Svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -134,8 +134,8 @@ export default function HistoryScreen({ navigation }) {
                 <Path d="M14 13h12M14 18h12M14 23h8" stroke={SG.primary} strokeWidth="1.6" strokeLinecap="round" />
               </Svg>
             </View>
-            <Text style={styles.emptyTitle}>No bills yet</Text>
-            <Text style={styles.emptySub}>Scan your first receipt and split it with friends. They'll appear here.</Text>
+            <Text style={styles.emptyTitle}>No one-time bills yet</Text>
+            <Text style={styles.emptySub}>Scan your first one-time receipt and split it with friends. Travel receipts are shown in Travel groups.</Text>
             <TouchableOpacity
               style={styles.startBtn}
               onPress={() => navigation.replace('Scan')}
@@ -147,23 +147,23 @@ export default function HistoryScreen({ navigation }) {
         )}
 
         {/* Surface in-flight bills first */}
-        {!loading && bills.some(b => b.status === 'open') && (
+        {!loading && bills.some(b => !b.travelGroupId && b.status === 'open') && (
           <Text style={styles.sectionTitle}>In progress</Text>
         )}
-        {!loading && bills.filter(b => b.status === 'open').map((b) => (
+        {!loading && bills.filter(b => !b.travelGroupId && b.status === 'open').map((b) => (
           <BillCard key={b.billId} bill={b} onOpen={handleOpen} resuming={resumingId === b.billId} />
         ))}
 
-        {!loading && bills.some(b => b.status === 'closed') && (
+        {!loading && bills.some(b => !b.travelGroupId && b.status !== 'open') && (
           <Text style={[styles.sectionTitle, { marginTop: 18 }]}>Settled</Text>
         )}
-        {!loading && bills.filter(b => b.status === 'closed').map((b) => (
+        {!loading && bills.filter(b => !b.travelGroupId && b.status !== 'open').map((b) => (
           <BillCard key={b.billId} bill={b} onOpen={handleOpen} resuming={resumingId === b.billId} />
         ))}
 
-        {!loading && bills.length > 0 && (
+        {!loading && bills.some(b => !b.travelGroupId) && (
           <Text style={styles.footnote}>
-            {bills.length} bill{bills.length === 1 ? '' : 's'} · {cloudMode ? 'auto-refreshes every 5s' : 'offline'}
+            {bills.filter(b => !b.travelGroupId).length} bill{bills.filter(b => !b.travelGroupId).length === 1 ? '' : 's'} · {cloudMode ? 'auto-refreshes every 5s' : 'offline'}
           </Text>
         )}
       </ScrollView>

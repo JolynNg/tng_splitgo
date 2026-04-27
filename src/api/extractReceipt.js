@@ -112,12 +112,27 @@ function parseJsonResponse(rawText) {
 
 const SUPPORTED_CURRENCIES = ['MYR', 'SGD', 'THB', 'IDR', 'USD', 'EUR', 'CNY'];
 
+function inferCurrencyFallback(parsed, currentCurrency) {
+  if (currentCurrency !== 'MYR') return currentCurrency;
+  const haystack = [
+    parsed?.restaurant || '',
+    ...(Array.isArray(parsed?.items) ? parsed.items.map((it) => it?.name || '') : []),
+  ].join(' ');
+
+  // Thai receipts often omit explicit currency symbols in line rows, but the
+  // dish names are Thai script. If OCR defaulted to MYR while text is Thai,
+  // treat as THB so UX can show original-currency first.
+  if (/[\u0E00-\u0E7F]/.test(haystack) || /บาท/i.test(haystack)) return 'THB';
+  return currentCurrency;
+}
+
 function normalizeResult(parsed) {
   if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
     throw new Error('No items could be extracted from the receipt.');
   }
   const ccyRaw = (parsed.currency || 'MYR').toString().toUpperCase().trim();
-  const currency = SUPPORTED_CURRENCIES.includes(ccyRaw) ? ccyRaw : 'MYR';
+  const normalized = SUPPORTED_CURRENCIES.includes(ccyRaw) ? ccyRaw : 'MYR';
+  const currency = inferCurrencyFallback(parsed, normalized);
 
   // The rest of the app uses `unit` and computes line total as `qty * unit`.
   // The model now returns `lineTotal` (the printed price, unambiguous on

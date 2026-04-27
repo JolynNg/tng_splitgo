@@ -8,38 +8,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import TngAvatar from '../components/TngAvatar';
 import { SG } from '../tokens';
-import { useFlow } from '../context/FlowContext';
 import { useAuth } from '../context/AuthContext';
 
-export default function ParticipantsScreen({ navigation }) {
-  const { selected, setSelected, createBillGroup, travelBillMeta } = useFlow();
+/**
+ * Step 1 of travel setup — same contact-table UX as one-time "Add People",
+ * but selection is local (does not touch FlowContext bill state).
+ */
+export default function TravelPickContactsScreen({ navigation }) {
   const { me, contacts, contactsError, refreshContacts, contactsLoading } = useAuth();
+  const [selected, setSelected] = useState([]);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('Contacts');
-  const [creating, setCreating] = useState(false);
 
-  // Travel trip: each time this screen opens, pre-fill the trip roster (also
-  // after the 2nd, 3rd receipt scan — same travelGroupId, fresh Participants).
-  useFocusEffect(
-    useCallback(() => {
-      refreshContacts();
-    }, [refreshContacts]),
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      const tn = travelBillMeta?.travelParticipantNames;
-      if (!tn?.length || !me?.name) return;
-      const others = tn.filter((n) => n !== me.name);
-      setSelected(others);
-    }, [travelBillMeta?.travelGroupId, travelBillMeta?.travelParticipantNames, me?.name, setSelected]),
-  );
-
-  // Everyone in the directory except the signed-in user (they're shown separately as "YOU")
   const others = (contacts || []).filter(c => c.name !== me?.name);
   const filtered = others.filter(p =>
     p.name.toLowerCase().includes(query.toLowerCase()) ||
-    (p.phone && p.phone.includes(query))
+    (p.phone && p.phone.includes(query)),
   );
 
   const toggle = (name) => {
@@ -47,7 +31,21 @@ export default function ParticipantsScreen({ navigation }) {
     else setSelected([...selected, name]);
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      refreshContacts();
+    }, [refreshContacts]),
+  );
+
   const count = 1 + selected.length;
+
+  const onContinue = () => {
+    if (selected.length === 0) {
+      Alert.alert('Add friends', 'Pick at least one travel buddy from your contacts.');
+      return;
+    }
+    navigation.navigate('TravelTripName', { selectedNames: [...selected] });
+  };
 
   return (
     <View style={styles.screen}>
@@ -59,7 +57,7 @@ export default function ParticipantsScreen({ navigation }) {
               <Path d="M12 4l-6 6 6 6" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </Svg>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Add People</Text>
+          <Text style={styles.headerTitle}>Add people to trip</Text>
           <View style={{ width: 32 }} />
         </View>
         <View style={styles.tabs}>
@@ -102,7 +100,7 @@ export default function ParticipantsScreen({ navigation }) {
             placeholder="Search name or phone number"
             placeholderTextColor={SG.muted}
             style={styles.searchInput}
-            keyboardType="phone-pad"
+            keyboardType="default"
           />
           <TouchableOpacity onPress={refreshContacts} activeOpacity={0.7}>
             <Svg width="20" height="20" viewBox="0 0 20 20" fill="none">
@@ -120,8 +118,8 @@ export default function ParticipantsScreen({ navigation }) {
             </Svg>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.infoTitle}>Include yourself in the split</Text>
-            <Text style={styles.infoSub}>You're added by default. Pick friends from your contacts below.</Text>
+            <Text style={styles.infoTitle}>{"You're on the trip by default"}</Text>
+            <Text style={styles.infoSub}>{"Pick friends from your contacts. You'll name the trip on the next step."}</Text>
           </View>
         </View>
 
@@ -130,12 +128,11 @@ export default function ParticipantsScreen({ navigation }) {
           {contactsLoading && <ActivityIndicator size="small" color={SG.primary} />}
         </View>
 
-        {/* You row — uses the signed-in user's actual name */}
         <View style={styles.personRow}>
           <TngAvatar size={44} />
           <View style={{ flex: 1 }}>
             <Text style={styles.personName}>{(me?.name || 'YOU').toUpperCase()}</Text>
-            <Text style={styles.personPhone}>Bill creator</Text>
+            <Text style={styles.personPhone}>Trip member</Text>
           </View>
           <View style={styles.defaultBadge}>
             <Text style={styles.defaultText}>YOU</Text>
@@ -186,60 +183,17 @@ export default function ParticipantsScreen({ navigation }) {
       </ScrollView>
 
       <SafeAreaView edges={['bottom']} style={styles.footer}>
-        <Text style={styles.footerBalance}>
-          Each person picks their own items · powered by AI
-        </Text>
+        <Text style={styles.footerBalance}>Next: give your trip a name</Text>
         <TouchableOpacity
-          onPress={async () => {
-            if (creating || selected.length === 0) return;
-            setCreating(true);
-            try {
-              await createBillGroup();
-              // Wipe the Scan→Items→Participants stack. Keep one-time flow fully
-              // isolated from travel routes.
-              if (travelBillMeta?.travelGroupId) {
-                navigation.reset({
-                  index: 3,
-                  routes: [
-                    { name: 'SplitGoHome' },
-                    { name: 'TravelGroups' },
-                    {
-                      name: 'TravelGroupHub',
-                      params: {
-                        travelGroupId: travelBillMeta.travelGroupId,
-                        travelGroupName: travelBillMeta.travelGroupName || 'Trip',
-                        participantNames: travelBillMeta.travelParticipantNames || [],
-                      },
-                    },
-                    { name: 'BillCreated' },
-                  ],
-                });
-              } else {
-                navigation.reset({
-                  index: 1,
-                  routes: [
-                    { name: 'SplitGoHome' },
-                    { name: 'BillCreated' },
-                  ],
-                });
-              }
-            } finally {
-              setCreating(false);
-            }
-          }}
-          disabled={selected.length === 0 || creating}
-          style={[
-            styles.continueBtn,
-            (selected.length === 0 || creating) && styles.continueBtnDisabled,
-          ]}
+          onPress={onContinue}
+          disabled={selected.length === 0}
+          style={[styles.continueBtn, selected.length === 0 && styles.continueBtnDisabled]}
           activeOpacity={0.8}
         >
           <Text style={styles.continueBtnText}>
-            {creating
-              ? 'Creating bill group…'
-              : selected.length === 0
-                ? 'Pick at least one friend'
-                : `Create bill group with ${count} ${count === 1 ? 'person' : 'people'}`}
+            {selected.length === 0
+              ? 'Pick at least one friend'
+              : `Continue · ${count} ${count === 1 ? 'person' : 'people'}`}
           </Text>
         </TouchableOpacity>
       </SafeAreaView>
@@ -335,7 +289,6 @@ const styles = StyleSheet.create({
   },
   continueBtnDisabled: { backgroundColor: SG.muted2 },
   continueBtnText: { color: '#fff', fontWeight: '600', fontSize: 15 },
-
   emptyCard: {
     padding: 18, borderRadius: 12, backgroundColor: SG.bg,
     alignItems: 'center', marginTop: 12,

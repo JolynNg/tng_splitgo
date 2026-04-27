@@ -6,17 +6,18 @@
 #   cd infra && ./deploy.sh
 #
 # Environment overrides (optional):
-#   AWS_REGION  (default: ap-southeast-5)
+#   AWS_REGION  (default: ap-southeast-1 · Singapore)
 #   STACK_NAME  (default: splitgo)
 #   SES_SENDER  (default: empty — email step skipped if not provided)
 #   DASHSCOPE_API_KEY (default: read from ../.env)
 
 set -euo pipefail
 
-REGION="${AWS_REGION:-ap-southeast-5}"
+REGION="${AWS_REGION:-ap-southeast-1}"
 STACK="${STACK_NAME:-splitgo}"
 TABLE="SplitGoBills"
 CONTACTS_TABLE="SplitGoContacts"
+TRIPS_TABLE="SplitGoTrips"
 ROLE_NAME="${STACK}-lambda-role"
 POLICY_NAME="${STACK}-lambda-policy"
 FUNC_NAME="${STACK}-api"
@@ -72,7 +73,7 @@ else
   echo "  ✓ created"
 fi
 
-# Seed 5 starter contacts on the FIRST run only (so re-deploy is non-destructive).
+# Seed starter contacts on the FIRST run only (so re-deploy is non-destructive).
 SEED_COUNT="$(aws dynamodb scan --region "$REGION" --table-name "$CONTACTS_TABLE" \
   --select COUNT --query 'Count' --output text 2>/dev/null || echo 0)"
 if [ "$SEED_COUNT" = "0" ]; then
@@ -82,37 +83,57 @@ if [ "$SEED_COUNT" = "0" ]; then
 {
   "$CONTACTS_TABLE": [
     { "PutRequest": { "Item": {
-      "contactId": {"S": "CT-seed-aisyah"}, "name": {"S": "Aisyah Rahman"},
-      "phone": {"S": "+60123456789"}, "color": {"S": "#0070BA"},
+      "contactId": {"S": "CT-seed-javon"}, "name": {"S": "Javon"},
+      "phone": {"S": "+60145246924"}, "color": {"S": "#0070BA"},
       "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
     }}},
     { "PutRequest": { "Item": {
-      "contactId": {"S": "CT-seed-marcus"}, "name": {"S": "Marcus Tan"},
-      "phone": {"S": "+60173456789"}, "color": {"S": "#7AC74F"},
+      "contactId": {"S": "CT-seed-bc"}, "name": {"S": "BC"},
+      "phone": {"S": "+60124523653"}, "color": {"S": "#7AC74F"},
       "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
     }}},
     { "PutRequest": { "Item": {
-      "contactId": {"S": "CT-seed-priya"}, "name": {"S": "Priya Nair"},
-      "phone": {"S": "+60195501234"}, "color": {"S": "#F5A623"},
+      "contactId": {"S": "CT-seed-kenny"}, "name": {"S": "Kenny"},
+      "phone": {"S": "+60167745723"}, "color": {"S": "#F5A623"},
       "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
     }}},
     { "PutRequest": { "Item": {
-      "contactId": {"S": "CT-seed-daniel"}, "name": {"S": "Daniel Lim"},
-      "phone": {"S": "+60167008822"}, "color": {"S": "#E63946"},
+      "contactId": {"S": "CT-seed-ashley"}, "name": {"S": "Ashley"},
+      "phone": {"S": "+60172346924"}, "color": {"S": "#E63946"},
       "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
     }}},
     { "PutRequest": { "Item": {
-      "contactId": {"S": "CT-seed-jolynn"}, "name": {"S": "Jolynn Tan"},
-      "phone": {"S": "+60112345678"}, "color": {"S": "#9B5DE5"},
+      "contactId": {"S": "CT-seed-christina"}, "name": {"S": "Christina"},
+      "phone": {"S": "+60119482529"}, "color": {"S": "#9B5DE5"},
+      "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
+    }}},
+    { "PutRequest": { "Item": {
+      "contactId": {"S": "CT-seed-yen"}, "name": {"S": "Yen"},
+      "phone": {"S": "+60182463561"}, "color": {"S": "#00B4D8"},
       "balance": {"N": "1000"}, "createdAt": {"N": "$NOW"}
     }}}
   ]
 }
 JSON
 )" >/dev/null
-  echo "  ✓ seeded 5 starter contacts"
+  echo "  ✓ seeded 6 starter contacts"
 else
   echo "  ✓ $SEED_COUNT contacts already present (skipping seed)"
+fi
+
+# Trips table — server-of-record for travel groups (so every device on the
+# trip sees the same name/roster, not just the device that created it).
+echo "▸ DynamoDB table $TRIPS_TABLE"
+if aws dynamodb describe-table --region "$REGION" --table-name "$TRIPS_TABLE" >/dev/null 2>&1; then
+  echo "  ✓ exists"
+else
+  aws dynamodb create-table --region "$REGION" \
+    --table-name "$TRIPS_TABLE" \
+    --attribute-definitions AttributeName=travelGroupId,AttributeType=S \
+    --key-schema AttributeName=travelGroupId,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST >/dev/null
+  aws dynamodb wait table-exists --region "$REGION" --table-name "$TRIPS_TABLE"
+  echo "  ✓ created"
 fi
 
 # ================================================================
@@ -182,6 +203,7 @@ ENV_VARS=$(cat <<EOF
   "Variables": {
     "BILLS_TABLE":       "$TABLE",
     "CONTACTS_TABLE":    "$CONTACTS_TABLE",
+    "TRIPS_TABLE":       "$TRIPS_TABLE",
     "RECEIPT_BUCKET":    "$BUCKET",
     "SES_SENDER":        "$SES_SENDER",
     "DASHSCOPE_API_KEY": "$DASHSCOPE_API_KEY"
@@ -242,6 +264,22 @@ aws lambda add-permission --region "$REGION" \
 
 INVOKE_URL="https://$API_ID.execute-api.$REGION.amazonaws.com"
 
+# Keep the app’s Metro bundle in sync with this API (avoids stale / wrong API ids).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env"
+if [ -f "$ENV_FILE" ]; then
+  if grep -q '^EXPO_PUBLIC_AWS_API_URL=' "$ENV_FILE"; then
+    TMP="$(mktemp)"
+    sed "s|^EXPO_PUBLIC_AWS_API_URL=.*|EXPO_PUBLIC_AWS_API_URL=${INVOKE_URL}|" "$ENV_FILE" >"$TMP" && mv "$TMP" "$ENV_FILE"
+    echo "▸ Updated EXPO_PUBLIC_AWS_API_URL in .env"
+  else
+    printf '\nEXPO_PUBLIC_AWS_API_URL=%s\n' "$INVOKE_URL" >>"$ENV_FILE"
+    echo "▸ Appended EXPO_PUBLIC_AWS_API_URL to .env"
+  fi
+else
+  echo "▸ No .env at repo root — create one with EXPO_PUBLIC_AWS_API_URL=$INVOKE_URL"
+fi
+
 # ================================================================
 # Done
 # ================================================================
@@ -254,9 +292,6 @@ echo " DynamoDB table:   $TABLE"
 echo " S3 bucket:        $BUCKET"
 echo " Lambda:           $FUNC_NAME"
 echo ""
-echo " Next: paste this into ../.env:"
-echo "   EXPO_PUBLIC_AWS_API_URL=$INVOKE_URL"
-echo ""
-echo " Then restart Metro:"
+echo " Next: restart Metro so the app picks up .env (deploy updates it when .env exists):"
 echo "   CI=false npx expo start --clear"
 echo "──────────────────────────────────────────────────────────────"

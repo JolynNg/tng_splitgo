@@ -8,6 +8,7 @@
         "dynamodb:GetItem",
         "dynamodb:PutItem",
         "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
         "dynamodb:Query",
         "dynamodb:Scan"
       ],
@@ -26,6 +27,20 @@
         "dynamodb:BatchWriteItem"
       ],
       "Resource": "arn:aws:dynamodb:*:*:table/SplitGoContacts"
+    },
+    {
+      "Sid": "DynamoTrips",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchWriteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/SplitGoTrips"
     },
     {
       "Sid": "S3Receipts",

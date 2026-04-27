@@ -34,12 +34,24 @@ async function callApi(path, opts = {}) {
   if (!isCloudEnabled()) {
     throw new Error('AWS backend not configured — running in local demo mode.');
   }
-  const url = `${AWS_API_URL.replace(/\/$/, '')}${path}`;
-  const response = await fetch(url, {
-    method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const base = AWS_API_URL.replace(/\/$/, '');
+  const url = `${base}${path}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/network request failed/i.test(msg)) {
+      throw new Error(
+        `${msg} — cannot reach ${base}. Re-run \`cd infra && ./deploy.sh\`, then \`npx expo start --clear\`.`,
+      );
+    }
+    throw e;
+  }
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`AWS API ${path} ${response.status}: ${text}`);
@@ -121,6 +133,23 @@ export async function setPaid(billId, body) {
 export async function cancelBill(billId, body) {
   if (!isCloudEnabled()) return { local: true };
   return callApi(`/bills/${billId}/cancel`, { method: 'POST', body });
+}
+
+/**
+ * Delete a cancelled bill permanently.
+ * Intended for travel hub cleanup after a bill has been cancelled.
+ */
+export async function deleteCancelledBill(billId, body) {
+  if (!isCloudEnabled()) return { local: true };
+  try {
+    return await callApi(`/bills/${billId}/delete`, { method: 'POST', body });
+  } catch (e) {
+    const msg = String(e?.message || '');
+    if (/route not found/i.test(msg) || /\s404:/.test(msg)) {
+      throw new Error('Delete endpoint not deployed yet. Please run: cd infra && ./deploy.sh');
+    }
+    throw e;
+  }
 }
 
 /**

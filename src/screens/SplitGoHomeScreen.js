@@ -20,6 +20,11 @@ import { useAuth } from '../context/AuthContext';
  *      No separate History tab — every bill lives on one scroll.
  */
 export default function SplitGoHomeScreen({ navigation }) {
+  const safeBack = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('SplitBillMode');
+  };
+
   const { loadBillFromServer } = useFlow();
   const { me, refreshMe } = useAuth();
   const myName = me?.name;
@@ -85,16 +90,23 @@ export default function SplitGoHomeScreen({ navigation }) {
     }
   };
 
-  // Split bills into active/settled groups for grouped rendering. We keep
-  // the server's order (newest first) inside each group.
+  // One-time flow must stay isolated from travel-group receipts.
+  // Any bill tagged with a travelGroupId belongs exclusively to Travel.
+  const oneTimeBills = useMemo(
+    () => bills.filter((b) => !b.travelGroupId),
+    [bills],
+  );
+
+  // Split one-time bills into active/settled groups for grouped rendering.
+  // We keep the server's order (newest first) inside each group.
   const { active, settled } = useMemo(() => {
     const a = [], s = [];
-    bills.forEach((b) => {
+    oneTimeBills.forEach((b) => {
       if (b.status === 'open') a.push(b);
       else s.push(b);
     });
     return { active: a, settled: s };
-  }, [bills]);
+  }, [oneTimeBills]);
 
   return (
     <View style={styles.screen}>
@@ -112,7 +124,7 @@ export default function SplitGoHomeScreen({ navigation }) {
             </View>
 
             <TouchableOpacity
-              onPress={() => navigation.navigate('Home')}
+              onPress={safeBack}
               style={[styles.iconBtn, styles.headerLeft]}
               activeOpacity={0.8}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -177,12 +189,12 @@ export default function SplitGoHomeScreen({ navigation }) {
           </View>
         )}
 
-        {!loading && !error && bills.length === 0 && (
+        {!loading && !error && oneTimeBills.length === 0 && (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>No bills yet</Text>
+            <Text style={styles.emptyTitle}>No one-time bills yet</Text>
             <Text style={styles.emptySub}>
-              Bills you create or get added to will appear here. Active ones stay
-              live with claim & payment progress; settled ones get archived below.
+              One-time bills you create or get added to appear here. Travel-group
+              receipts live in Travel and are kept separate.
             </Text>
           </View>
         )}
@@ -228,7 +240,7 @@ export default function SplitGoHomeScreen({ navigation }) {
           </>
         )}
 
-        {!loading && bills.length > 0 && (
+        {!loading && oneTimeBills.length > 0 && (
           <Text style={styles.footnote}>
             Auto-refreshes every 5s
           </Text>

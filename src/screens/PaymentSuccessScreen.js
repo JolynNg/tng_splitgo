@@ -42,7 +42,7 @@ export default function PaymentSuccessScreen({ navigation }) {
     return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }, []);
 
-  const handleSplit = () => navigation.replace('Scan');
+  const handleSplit = () => navigation.replace('SplitBillMode');
   const handleDone  = () => navigation.popToTop();
 
   return (

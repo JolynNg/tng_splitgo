@@ -53,6 +53,7 @@ export function AuthProvider({ children }) {
       return list;
     } catch (err) {
       setContactsError(err.message);
+      setContacts([]);
       return [];
     } finally {
       setContactsLoading(false);

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useRoute } from '@react-navigation/native';
 import {
   View, Text, Image, TouchableOpacity, StyleSheet, Animated, Easing,
   StatusBar, ActivityIndicator, Alert,
@@ -11,6 +12,7 @@ import Svg, { Path, Rect, Circle } from 'react-native-svg';
 import { SG } from '../tokens';
 import { extractReceiptItems } from '../api/extractReceipt';
 import { uploadReceipt } from '../api/uploadService';
+import { convertAmountsToMyr } from '../api/fxService';
 import { useFlow } from '../context/FlowContext';
 
 // A short, calm sequence of status lines shown one at a time during the
@@ -71,6 +73,7 @@ function Dot({ delay = 0 }) {
 }
 
 export default function ScanScreen({ navigation }) {
+  const route = useRoute();
   const [permission, requestPermission] = useCameraPermissions();
   const [processing, setProcessing] = useState(false);
   const [stageIndex, setStageIndex] = useState(0);
@@ -81,7 +84,10 @@ export default function ScanScreen({ navigation }) {
   const cameraRef = useRef(null);
   const scanAnim     = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
-  const { setItems, setReceiptMeta, setReceiptKey, setReceiptUrl, resetFlow } = useFlow();
+  const {
+    setItems, setReceiptMeta, setReceiptKey, setReceiptUrl, resetFlow,
+    setTravelBillMeta, clearTravelBillMeta,
+  } = useFlow();
 
   // Animate the scan line when processing
   useEffect(() => {
@@ -159,6 +165,16 @@ export default function ScanScreen({ navigation }) {
     // previously viewed history bill (loadedParticipants, claims, billId, ...)
     // so the upcoming Items/Participants/BillCreated flow starts clean.
     resetFlow();
+    const tg = route.params?.travelGroupId;
+    if (tg) {
+      setTravelBillMeta({
+        travelGroupId: tg,
+        travelGroupName: route.params?.travelGroupName || '',
+        travelParticipantNames: route.params?.travelParticipantNames || [],
+      });
+    } else {
+      clearTravelBillMeta();
+    }
 
     // Stage 1 — compress on-device. This typically takes <500ms.
     goToStage('compress');
@@ -190,9 +206,67 @@ export default function ScanScreen({ navigation }) {
       const { restaurant, date, items, sst, serviceCharge, currency } = await extractReceiptItems(base64);
       fakeProgressTimers.forEach(clearTimeout);
       animateProgressTo(1, 350);
+      let nextItems = items;
+      let nextSst = sst;
+      let nextServiceCharge = serviceCharge;
+      let fxMeta = null;
+      let fxFailed = false;
+      const sourceCcy = String(currency || 'MYR').toUpperCase();
+      if (sourceCcy !== 'MYR') {
+        try {
+          const amounts = [
+            ...items.map((it) => Number(it.unit) || 0),
+            Number(sst) || 0,
+            Number(serviceCharge) || 0,
+          ];
+          const fx = await convertAmountsToMyr({ currency: sourceCcy, date, amounts });
+          const rate = Number(fx.fxRateToMyr) || 0;
+          // Reject a 1:1 result for a non-MYR receipt — that would render
+          // foreign amounts as "RM <native>", which is the bug we just fixed.
+          // Treat it like an FX failure and let the UI keep source currency.
+          if (rate <= 0 || rate === 1) {
+            throw new Error(`unusable FX rate (${rate}) for ${sourceCcy}->MYR`);
+          }
+          const converted = fx.amountsMyr || [];
+          nextItems = items.map((it, idx) => ({
+            ...it,
+            sourceUnit: Number(it.unit) || 0,
+            unit: Number(converted[idx] ?? it.unit) || 0,
+          }));
+          nextSst = Number(converted[items.length] ?? sst ?? 0);
+          nextServiceCharge = Number(converted[items.length + 1] ?? serviceCharge ?? 0);
+          fxMeta = {
+            sourceCurrency: sourceCcy,
+            sourceSst: Number(sst) || 0,
+            sourceServiceCharge: Number(serviceCharge) || 0,
+            fxRateToMyr: rate,
+            fxDate: fx.fxDate || date || null,
+          };
+          console.log(`[scan] FX ${sourceCcy} -> MYR @ ${rate} (date ${fx.fxDate || date || 'today'})`);
+        } catch (fxErr) {
+          // Don't block the scan, but flag the failure so we can warn the user.
+          fxFailed = true;
+          console.warn('[scan] FX convert failed, keeping source currency:', fxErr?.message);
+        }
+      }
 
-      setItems(items);
-      setReceiptMeta({ restaurant, date, sst, serviceCharge, currency });
+      setItems(nextItems);
+      setReceiptMeta({
+        restaurant,
+        date,
+        sst: nextSst,
+        serviceCharge: nextServiceCharge,
+        currency: fxMeta ? 'MYR' : sourceCcy,
+        ...(fxMeta || {}),
+      });
+
+      if (fxFailed && sourceCcy !== 'MYR') {
+        Alert.alert(
+          `Showing amounts in ${sourceCcy}`,
+          `We couldn't reach the FX provider to convert ${sourceCcy} to RM, so the items below are shown in the receipt's original currency. Please retry the scan if you want RM totals.`,
+          [{ text: 'OK' }],
+        );
+      }
 
       // Tiny pause so the user sees the bar cap at 100% — feels finished,
       // not abrupt.
