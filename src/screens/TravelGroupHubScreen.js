@@ -191,9 +191,7 @@ export default function TravelGroupHubScreen({ navigation, route }) {
     }, [fetchList, hiddenKey]),
   );
 
-  // Keep the trip hub in sync across devices: if another participant deletes a
-  // cancelled receipt, everyone currently on this screen should see it vanish
-  // shortly without needing pull-to-refresh or re-entering the page.
+  // Keep the trip hub in sync across devices for receipt/status updates.
   useEffect(() => {
     if (!myName || !travelGroupId) return undefined;
     const id = setInterval(() => {
@@ -330,6 +328,25 @@ export default function TravelGroupHubScreen({ navigation, route }) {
           <Text style={styles.scanCtaSub}>Whoever paid can scan — same group on every receipt</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity
+          style={styles.pfmEntry}
+          activeOpacity={0.88}
+          onPress={() => navigation.navigate('TravelPFM', { travelGroupId, travelGroupName })}
+        >
+          <View style={styles.pfmEntryIcon}>
+            <Svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <Path d="M4 19h16M7 16V9M12 16V5M17 16v-7" stroke={SG.primary} strokeWidth="1.8" strokeLinecap="round" />
+            </Svg>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.pfmEntryTitle}>Trip Insights</Text>
+            <Text style={styles.pfmEntrySub}>Spending carousel, category cards and AI advice</Text>
+          </View>
+          <Svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <Path d="M5 3l4 4-4 4" stroke={SG.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
+        </TouchableOpacity>
+
         <Text style={styles.sectionLabel}>Receipts on this trip</Text>
         {loading ? (
           <ActivityIndicator style={{ marginTop: 24 }} color={SG.primary} />
@@ -378,6 +395,7 @@ export default function TravelGroupHubScreen({ navigation, route }) {
             )
           ))
         )}
+
       </ScrollView>
 
       {/* Trip settlement strip */}
@@ -423,6 +441,17 @@ const styles = StyleSheet.create({
   },
   scanCtaText: { color: '#fff', fontSize: 17, fontWeight: '800', marginTop: 10 },
   scanCtaSub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 4, lineHeight: 17 },
+  pfmEntry: {
+    marginHorizontal: 16, marginTop: 10, padding: 14, borderRadius: 14,
+    backgroundColor: '#fff', borderWidth: 1, borderColor: SG.line2,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+  },
+  pfmEntryIcon: {
+    width: 42, height: 42, borderRadius: 12, backgroundColor: SG.primarySoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  pfmEntryTitle: { fontSize: 15, fontWeight: '800', color: SG.ink },
+  pfmEntrySub: { fontSize: 12, color: SG.muted, marginTop: 2 },
   sectionLabel: {
     marginHorizontal: 16, marginTop: 22, marginBottom: 8, fontSize: 13, fontWeight: '700', color: SG.muted,
     letterSpacing: 0.3,

@@ -178,6 +178,26 @@ export async function listBillsForUser(user) {
   return callApi(`/bills?user=${encodeURIComponent(user)}`);
 }
 
+export async function getTripInsights({ travelGroupId, user }) {
+  if (!isCloudEnabled()) {
+    return {
+      travelGroupId,
+      user,
+      currency: 'MYR',
+      totalTripSpend: 0,
+      categoryBreakdown: [],
+      perPersonSpend: [],
+      mySpend: 0,
+      groupAverage: 0,
+      topSpender: null,
+      advice: 'Backend not configured.',
+      comparison: 'No comparison available in local mode.',
+      local: true,
+    };
+  }
+  return callApi('/ai/trip-insights', { method: 'POST', body: { travelGroupId, user } });
+}
+
 export const BACKEND_PROVIDER = isCloudEnabled()
   ? `AWS · ${AWS_API_URL}`
   : 'local demo mode';

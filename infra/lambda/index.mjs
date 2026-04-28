@@ -80,6 +80,9 @@ const genBillId = () => {
 const CONTACT_PALETTE = ['#0070BA', '#7AC74F', '#F5A623', '#E63946', '#9B5DE5', '#00B4D8', '#FB8500', '#06D6A0'];
 
 const STARTING_BALANCE = 1000; // every wallet starts with RM 1,000
+const RECEIPT_CATEGORY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // warm-lambda in-memory cache
+const receiptCategoryCache = new Map();
+const DASH_REGEX = /[-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g;
 
 const genContactId = () => {
   return 'CT-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
@@ -1129,6 +1132,146 @@ export const handler = async (event) => {
       return ok({ billId, message: text, model: 'qwen-plus' });
     }
 
+    // ---------- POST /ai/trip-insights ----------
+    // PFM insights for a travel group: category split, per-member spend, and
+    // AI-generated advice/comparison text for the current user.
+    if (method === 'POST' && path === '/ai/trip-insights') {
+      const travelGroupId = (body.travelGroupId || '').trim();
+      const user = (body.user || '').trim();
+      if (!travelGroupId) return bad('missing travelGroupId');
+      if (!user) return bad('missing user');
+      if (!DASHSCOPE_KEY) return bad('DASHSCOPE_API_KEY not configured', 503);
+
+      const r = await ddb.send(new ScanCommand({ TableName: TABLE }));
+      const bills = (r.Items || []).filter(
+        (b) => b?.receiptMeta?.travelGroupId === travelGroupId && b?.status !== 'cancelled',
+      );
+      if (!bills.length) {
+        return ok({
+          travelGroupId,
+          user,
+          currency: 'MYR',
+          totalTripSpend: 0,
+          categoryBreakdown: [],
+          perPersonSpend: [],
+          mySpend: 0,
+          groupAverage: 0,
+          topSpender: null,
+          advice: 'No completed or active receipts yet. Scan the first receipt to start your trip insights.',
+          comparison: 'There is not enough data to compare spending yet.',
+        });
+      }
+
+      const categoryTotals = {
+        food: 0, fashion: 0, amusement: 0, transport: 0, shopping: 0, lodging: 0, cosmetics: 0, other: 0,
+      };
+      const personTotals = {};
+      let totalTripSpend = 0;
+
+      // Speed up insights by processing bills in small batches instead of fully
+      // sequentially. This lowers total latency without overloading upstream APIs.
+      const BATCH_SIZE = 3;
+      for (let i = 0; i < bills.length; i += BATCH_SIZE) {
+        const batch = bills.slice(i, i + BATCH_SIZE);
+        const batchRows = await Promise.all(batch.map(async (b) => {
+          const fx = await computeTotalsInMyr(b);
+          const billMyr = Number(fx.grandTotalMyr || 0);
+          const receiptCategory = billMyr > 0
+            ? await classifyReceiptCategoryWithAI(b)
+            : 'other';
+          return { totals: fx.totalsMyr || {}, billMyr, receiptCategory };
+        }));
+
+        batchRows.forEach((row) => {
+          Object.entries(row.totals).forEach(([name, amt]) => {
+            personTotals[name] = (personTotals[name] || 0) + (Number(amt) || 0);
+          });
+          totalTripSpend += row.billMyr;
+          categoryTotals[row.receiptCategory] = (categoryTotals[row.receiptCategory] || 0) + row.billMyr;
+        });
+      }
+
+      const people = Object.keys(personTotals);
+      const mySpend = Number(personTotals[user] || 0);
+      const groupAverage = people.length ? (Object.values(personTotals).reduce((a, b) => a + b, 0) / people.length) : 0;
+      const topSpender = people.length
+        ? people.reduce((a, b) => (personTotals[a] >= personTotals[b] ? a : b))
+        : null;
+
+      const categoryBreakdown = Object.entries(categoryTotals)
+        .map(([category, amount]) => ({ category, amount: +Number(amount || 0).toFixed(2) }))
+        .filter((x) => x.amount > 0.01)
+        .sort((a, b) => b.amount - a.amount);
+
+      const perPersonSpend = Object.entries(personTotals)
+        .map(([name, amount]) => ({ name, amount: +Number(amount || 0).toFixed(2) }))
+        .sort((a, b) => b.amount - a.amount);
+
+      let advice = '';
+      let comparison = '';
+      if (DASHSCOPE_KEY) {
+        try {
+          const prompt = [
+            `Trip ID: ${travelGroupId}`,
+            `Current user: ${user}`,
+            `Trip total (MYR): ${totalTripSpend.toFixed(2)}`,
+            `My spend (MYR): ${mySpend.toFixed(2)}`,
+            `Group average spend (MYR): ${groupAverage.toFixed(2)}`,
+            `Top spender: ${topSpender || 'N/A'}`,
+            `Category split: ${categoryBreakdown.map((c) => `${c.category} RM ${c.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
+            `Per person: ${perPersonSpend.map((p) => `${p.name} RM ${p.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
+          ].join('\n');
+
+          const aiResp = await fetch(DASHSCOPE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DASHSCOPE_KEY}` },
+            body: JSON.stringify({
+              model: 'qwen-plus',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a practical PFM assistant. Return concise JSON only with keys: advice, comparison. Keep tone friendly, non-judgmental, and specific. Mention 1-2 actionable savings tips.',
+                },
+                { role: 'user', content: prompt },
+              ],
+            }),
+          });
+          const aiJson = await aiResp.json();
+          const raw = aiJson?.choices?.[0]?.message?.content || '';
+          const parsed = JSON.parse(raw);
+          advice = stripHyphenText(parsed?.advice);
+          comparison = stripHyphenText(parsed?.comparison);
+        } catch {
+          // fall through to deterministic fallback text
+        }
+      }
+
+      if (!advice) {
+        const biggest = categoryBreakdown[0]?.category || 'other';
+        advice = stripHyphenText(`Your biggest spend category is ${biggest}. Try setting a per day cap and prioritise shared value meals to keep trip cost balanced.`);
+      }
+      if (!comparison) {
+        const delta = mySpend - groupAverage;
+        comparison = stripHyphenText(delta > 0
+          ? `You are spending about RM ${delta.toFixed(2)} above the group average.`
+          : `You are spending about RM ${Math.abs(delta).toFixed(2)} below the group average.`);
+      }
+
+      return ok({
+        travelGroupId,
+        user,
+        currency: 'MYR',
+        totalTripSpend: +totalTripSpend.toFixed(2),
+        categoryBreakdown,
+        perPersonSpend,
+        mySpend: +mySpend.toFixed(2),
+        groupAverage: +groupAverage.toFixed(2),
+        topSpender,
+        advice,
+        comparison,
+      });
+    }
+
     return bad(`route not found: ${method} ${path}`, 404);
   } catch (err) {
     console.error('handler error:', err);
@@ -1154,6 +1297,102 @@ function computeTotals(bill) {
   const totals = {};
   Object.keys(sub).forEach((n) => { totals[n] = +(sub[n] * taxMult).toFixed(2); });
   return totals;
+}
+
+function normaliseSpendCategory(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s) return 'other';
+  if (['food', 'f&b', 'fnb', 'restaurant', 'meal', 'dining'].includes(s)) return 'food';
+  if (['fashion', 'clothing', 'apparel'].includes(s)) return 'fashion';
+  if (['amusement', 'entertainment', 'activity', 'leisure'].includes(s)) return 'amusement';
+  if (['transport', 'travel', 'commute'].includes(s)) return 'transport';
+  if (['shopping', 'retail', 'souvenir'].includes(s)) return 'shopping';
+  if (['lodging', 'accommodation', 'stay', 'hotel'].includes(s)) return 'lodging';
+  if (['cosmetics', 'beauty', 'personal care', 'skincare'].includes(s)) return 'cosmetics';
+  return 'other';
+}
+
+async function classifyReceiptCategoryWithAI(bill) {
+  if (!DASHSCOPE_KEY) throw new Error('DASHSCOPE_API_KEY not configured for LLM-only category classification');
+  const savedCategoryRaw = bill?.receiptMeta?.aiCategory || bill?.receiptMeta?.spendCategory || bill?.receiptMeta?.category;
+  if (savedCategoryRaw) return normaliseSpendCategory(savedCategoryRaw);
+
+  const cacheKey = getReceiptCategoryCacheKey(bill);
+  const cached = getCachedReceiptCategory(cacheKey);
+  if (cached) return cached;
+
+  const restaurant = String(bill?.receiptMeta?.restaurant || '');
+  const items = Array.isArray(bill?.items)
+    ? bill.items.slice(0, 25).map((it) => ({
+      name: String(it?.name || '').slice(0, 80),
+      qty: Number(it?.qty) || 0,
+      unit: Number(it?.unit) || 0,
+    }))
+    : [];
+
+  const aiResp = await fetch(DASHSCOPE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DASHSCOPE_KEY}` },
+    body: JSON.stringify({
+      model: 'qwen-plus',
+      messages: [
+        {
+          role: 'system',
+          content: 'Classify this entire receipt into ONE spending category only. Allowed categories: food, fashion, amusement, transport, shopping, lodging, cosmetics, other. Return strict JSON: {"category":"<one category>","reason":"<short reason>"}',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            restaurant,
+            items,
+          }),
+        },
+      ],
+    }),
+  });
+
+  const aiJson = await aiResp.json();
+  const raw = String(aiJson?.choices?.[0]?.message?.content || '').trim();
+  if (!raw) throw new Error('LLM returned empty category response');
+  const jsonCandidate = raw.match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonCandidate) throw new Error('LLM response was not valid JSON');
+  const parsed = JSON.parse(jsonCandidate);
+  const category = normaliseSpendCategory(parsed?.category);
+  if (!category) throw new Error('LLM category missing');
+  setCachedReceiptCategory(cacheKey, category);
+  return category;
+}
+
+function getReceiptCategoryCacheKey(bill) {
+  const id = String(bill?.id || '');
+  const restaurant = String(bill?.receiptMeta?.restaurant || '').toLowerCase().trim();
+  const itemSig = Array.isArray(bill?.items)
+    ? bill.items.slice(0, 12).map((it) => `${String(it?.name || '').toLowerCase().slice(0, 24)}:${Number(it?.qty) || 0}:${Number(it?.unit) || 0}`).join('|')
+    : '';
+  return `${id}::${restaurant}::${itemSig}`;
+}
+
+function getCachedReceiptCategory(cacheKey) {
+  if (!cacheKey) return null;
+  const hit = receiptCategoryCache.get(cacheKey);
+  if (!hit) return null;
+  if ((Date.now() - hit.ts) > RECEIPT_CATEGORY_CACHE_TTL_MS) {
+    receiptCategoryCache.delete(cacheKey);
+    return null;
+  }
+  return hit.category || null;
+}
+
+function setCachedReceiptCategory(cacheKey, category) {
+  if (!cacheKey || !category) return;
+  receiptCategoryCache.set(cacheKey, { category, ts: Date.now() });
+}
+
+function stripHyphenText(raw) {
+  return String(raw || '')
+    .replace(DASH_REGEX, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function renderEmailHtml(billId, bill, claims, totals) {

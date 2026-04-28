@@ -25,6 +25,7 @@ import TravelGroupsLobbyScreen from './src/screens/TravelGroupsLobbyScreen';
 import TravelPickContactsScreen from './src/screens/TravelPickContactsScreen';
 import TravelTripNameScreen from './src/screens/TravelTripNameScreen';
 import TravelGroupHubScreen from './src/screens/TravelGroupHubScreen';
+import TravelPFMScreen from './src/screens/TravelPFMScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -65,6 +66,7 @@ function AuthGate() {
           <Stack.Screen name="TravelPickContacts" component={TravelPickContactsScreen} />
           <Stack.Screen name="TravelTripName" component={TravelTripNameScreen} />
           <Stack.Screen name="TravelGroupHub" component={TravelGroupHubScreen} />
+          <Stack.Screen name="TravelPFM" component={TravelPFMScreen} />
           <Stack.Screen name="SplitGoHome"    component={SplitGoHomeScreen} />
           <Stack.Screen name="Scan"         component={ScanScreen} />
           <Stack.Screen name="Items"        component={ItemsScreen} />
