@@ -93,7 +93,7 @@ export default function ItemsScreen({ navigation }) {
     navigation.navigate('Participants');
   };
 
-  // ✦ Auto-categorise items via Qwen-Plus once on mount.
+  // Auto-categorise items via the AWS AI backend once on mount.
   // Runs only when we have items but no cached categories yet.
   useEffect(() => {
     if (items.length === 0) return;
@@ -218,7 +218,7 @@ export default function ItemsScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Language toggle — Qwen-Plus translates item names on the fly */}
+        {/* Language toggle — AWS AI backend translates item names on the fly */}
         <View style={styles.langRow}>
           <Text style={styles.langLabel}>View in</Text>
           {SUPPORTED_LANGS.map(l => {

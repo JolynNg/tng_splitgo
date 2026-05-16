@@ -1,12 +1,10 @@
 /**
- * AI text generation — runs server-side on AWS Lambda, which proxies to
- * Alibaba Cloud Model Studio (Qwen-Plus). Putting the call on Lambda lets
- * us keep the DashScope key out of the mobile bundle entirely.
+ * AI text generation — runs server-side on AWS Lambda using Qwen-Plus.
  *
- *     RN app  ──►  AWS API Gateway  ──►  AWS Lambda  ──►  Alibaba Qwen-Plus
+ *     RN app  ──►  AWS API Gateway  ──►  AWS Lambda  ──►  Qwen-Plus
  *
  * Endpoint: POST /ai/summary  body: { billId }
- * Returns:  { billId, message: string, model: 'qwen-plus' }
+ * Returns:  { billId, message: string, model: string }
  */
 
 const AWS_API_URL = process.env.EXPO_PUBLIC_AWS_API_URL;

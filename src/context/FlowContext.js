@@ -12,7 +12,7 @@ const DEFAULT_META = {
   date: null,
   sst: 3.81,           // null means not on receipt
   serviceCharge: 6.35, // null means not on receipt
-  currency: 'MYR',     // ISO-4217; auto-detected from receipt by Qwen-VL
+  currency: 'MYR',     // ISO-4217; auto-detected from receipt OCR
 };
 
 // Bill session statuses

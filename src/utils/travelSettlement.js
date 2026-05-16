@@ -34,12 +34,16 @@ export function computeBillTotals(bill) {
 export function accumulateDirectedOwes(billsFull) {
   const owes = {};
   for (const bill of billsFull) {
-    if (!bill || bill.status === 'cancelled') continue;
+    if (!bill || bill.status !== 'open') continue;
     const totals = computeBillTotals(bill);
     const creator = bill.creator;
     if (!creator) continue;
+    const paid = new Set(bill.paid || []);
+    const ready = new Set(bill.ready || []);
     for (const name of bill.participants || []) {
       if (name === creator) continue;
+      if (paid.has(name)) continue;
+      if (!ready.has(name)) continue;
       const amt = totals[name] || 0;
       if (amt <= 0.001) continue;
       const k = `${name}\x1e${creator}`;

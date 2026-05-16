@@ -10,6 +10,8 @@
 #   STACK_NAME  (default: splitgo)
 #   SES_SENDER  (default: empty — email step skipped if not provided)
 #   DASHSCOPE_API_KEY (default: read from ../.env)
+#   QWEN_TEXT_MODEL   (default: qwen-plus)
+#   QWEN_VL_MODEL     (default: qwen-vl-max)
 
 set -euo pipefail
 
@@ -22,12 +24,18 @@ ROLE_NAME="${STACK}-lambda-role"
 POLICY_NAME="${STACK}-lambda-policy"
 FUNC_NAME="${STACK}-api"
 
-# Pull DashScope key from .env if not exported
 if [ -z "${DASHSCOPE_API_KEY:-}" ] && [ -f ../.env ]; then
   DASHSCOPE_API_KEY="$(grep -E '^EXPO_PUBLIC_DASHSCOPE_API_KEY=' ../.env | cut -d'=' -f2- || echo '')"
 fi
 DASHSCOPE_API_KEY="${DASHSCOPE_API_KEY:-}"
+QWEN_TEXT_MODEL="${QWEN_TEXT_MODEL:-qwen-plus}"
+QWEN_VL_MODEL="${QWEN_VL_MODEL:-qwen-vl-max}"
 SES_SENDER="${SES_SENDER:-}"
+
+if [ -z "$DASHSCOPE_API_KEY" ]; then
+  echo "Missing DASHSCOPE_API_KEY. Add EXPO_PUBLIC_DASHSCOPE_API_KEY=... to ../.env or export DASHSCOPE_API_KEY before deploying." >&2
+  exit 1
+fi
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="splitgo-receipts-${ACCOUNT}"
@@ -40,6 +48,8 @@ echo " Table:          $TABLE"
 echo " Bucket:         $BUCKET"
 echo " Lambda:         $FUNC_NAME"
 echo " SES sender:     ${SES_SENDER:-<not set, email disabled>}"
+echo " Qwen text:      $QWEN_TEXT_MODEL"
+echo " Qwen vision:    $QWEN_VL_MODEL"
 echo " DashScope key:  ${DASHSCOPE_API_KEY:+set}${DASHSCOPE_API_KEY:-<not set>}"
 echo "──────────────────────────────────────────────────────────────"
 
@@ -206,7 +216,9 @@ ENV_VARS=$(cat <<EOF
     "TRIPS_TABLE":       "$TRIPS_TABLE",
     "RECEIPT_BUCKET":    "$BUCKET",
     "SES_SENDER":        "$SES_SENDER",
-    "DASHSCOPE_API_KEY": "$DASHSCOPE_API_KEY"
+    "DASHSCOPE_API_KEY": "$DASHSCOPE_API_KEY",
+    "QWEN_TEXT_MODEL":   "$QWEN_TEXT_MODEL",
+    "QWEN_VL_MODEL":     "$QWEN_VL_MODEL"
   }
 }
 EOF

@@ -62,7 +62,7 @@ export default function PaymentSuccessScreen({ navigation }) {
           <Animated.View style={{ opacity: fade, alignItems: 'center' }}>
             <Text style={styles.amount}>
               <Text style={styles.amountCurrency}>RM </Text>
-              <Text style={styles.amountValue}>XX</Text>
+              <Text style={styles.amountValue}>100.00</Text>
             </Text>
             <Text style={styles.transferred}>Transferred</Text>
           </Animated.View>

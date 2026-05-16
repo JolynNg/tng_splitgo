@@ -1,6 +1,6 @@
 # SplitGo · Cloud Infrastructure
 
-Single-command deployment of the entire AWS backend, plus the Alibaba Cloud AI hooks.
+Single-command deployment of the AWS backend, including Qwen AI hooks.
 
 ## Cloud services used
 
@@ -13,14 +13,14 @@ Single-command deployment of the entire AWS backend, plus the Alibaba Cloud AI h
 | **AWS** | SES (optional)         | Settlement email recap |
 | **AWS** | IAM                    | Least-privilege execution role |
 | **AWS** | CloudWatch Logs        | Lambda logs |
-| **Alibaba** | Model Studio · Qwen-VL-Max | Receipt OCR (called from app) |
-| **Alibaba** | Model Studio · Qwen-Plus   | AI-generated WhatsApp summary (called from Lambda) |
+| **Alibaba** | Model Studio · Qwen-VL-Max | Receipt OCR |
+| **Alibaba** | Model Studio · Qwen-Plus | Translation, categorisation, AI summaries and trip insights |
 
 ## Prerequisites
 
 - AWS CLI configured (`aws configure`)
 - Node.js 18+ (for `npm install` inside `lambda/`)
-- Alibaba Cloud Model Studio API key in `../.env` as `EXPO_PUBLIC_DASHSCOPE_API_KEY`
+- Qwen/DashScope API key in `../.env` as `EXPO_PUBLIC_DASHSCOPE_API_KEY`
 - Default region is **`ap-southeast-1` (Singapore)**. For Malaysia instead, run with `AWS_REGION=ap-southeast-5 ./deploy.sh`.
 
 ## One-command deploy

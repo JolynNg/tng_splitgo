@@ -1,13 +1,14 @@
 /**
  * SplitGo backend — single Lambda that fronts every API Gateway route.
  *
- * Touches FIVE AWS services + ONE Alibaba Cloud service:
+ * Touches AWS plus Qwen AI services:
  *   - DynamoDB        → bill + claim state (system of record)
  *   - S3              → receipt photo storage (pre-signed PUT URLs)
  *   - SES             → emails final settlement breakdown
  *   - CloudWatch Logs → automatic via Lambda runtime
  *   - IAM             → execution role grants the above
- *   - Alibaba Qwen-Plus → server-side AI text generation (settlement summary)
+ *   - Qwen-VL-Max     → receipt OCR
+ *   - Qwen-Plus       → item translation, categorisation, summaries, insights
  *
  * Routes:
  *   POST   /bills                     create a new bill
@@ -23,6 +24,9 @@
  *   POST   /bills/{billId}/close      payer closes bill (auto-distributes leftovers, emails recap)
  *   POST   /upload-url                returns a pre-signed S3 PUT URL for a receipt photo
  *   POST   /fx/convert                convert source-currency amounts to MYR by receipt date
+ *   POST   /ai/extract-receipt        Qwen-VL-Max extracts receipt rows
+ *   POST   /ai/categorize-items       Qwen-Plus labels receipt item categories
+ *   POST   /ai/translate-items        Qwen-Plus translates item names
  *   POST   /ai/summary                Qwen-Plus generates a friendly WhatsApp-ready settlement message
  *   GET    /contacts                  list every contact in the directory
  *   POST   /contacts                  add a new contact { name, phone }
@@ -52,6 +56,8 @@ const RECEIPT_BUCKET = process.env.RECEIPT_BUCKET || 'splitgo-receipts';
 const SES_SENDER     = process.env.SES_SENDER || '';
 const DASHSCOPE_KEY  = process.env.DASHSCOPE_API_KEY || '';
 const DASHSCOPE_URL  = process.env.DASHSCOPE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+const QWEN_TEXT_MODEL = process.env.QWEN_TEXT_MODEL || 'qwen-plus';
+const QWEN_VL_MODEL   = process.env.QWEN_VL_MODEL || 'qwen-vl-max';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
 const s3  = new S3Client({ region: REGION });
@@ -74,6 +80,144 @@ const genBillId = () => {
   for (let i = 0; i < 5; i++) id += chars[Math.floor(Math.random() * chars.length)];
   return id;
 };
+
+const RECEIPT_OCR_PROMPT = `You are a careful receipt-parsing expert. The image is a real-world restaurant receipt. It can be printed thermal paper, handwritten, bilingual English/Chinese/Malay, or a mix.
+
+Output one JSON object only:
+{
+  "restaurant": "string or null",
+  "date": "string formatted 'D MMM YYYY, HH:MM' or null if not printed",
+  "currency": "MYR | SGD | THB | IDR | USD | EUR | CNY",
+  "items": [
+    { "id": 1, "name": "string", "qty": number, "lineTotal": number }
+  ],
+  "sst": number or null,
+  "serviceCharge": number or null
+}
+
+Rules:
+- Include every dish, drink, side, or take-away charge that has a price written next to it.
+- Skip subtotal, grand total, SST, service charge, and empty template/category rows.
+- qty is the unit count. If absent, use 1.
+- lineTotal is the printed total for that row. Do not divide it by qty.
+- Preserve the item name language as written, including Chinese characters.
+- Currency: RM/MYR -> MYR, S$/SGD -> SGD, THB/baht -> THB, Rp/IDR -> IDR, $ -> USD, EUR -> EUR, RMB/CNY/¥ -> CNY. Default MYR.
+- If unreadable, return {"restaurant":null,"date":null,"currency":"MYR","items":[],"sst":null,"serviceCharge":null}.`;
+
+const SUPPORTED_CURRENCIES = ['MYR', 'SGD', 'THB', 'IDR', 'USD', 'EUR', 'CNY'];
+const ITEM_CATEGORIES = ['mains', 'drinks', 'sides', 'dessert', 'other'];
+const LANG_LABEL = { en: 'English', ms: 'Malay', zh: 'Simplified Chinese' };
+
+async function callQwen(messages, { model = QWEN_TEXT_MODEL, temperature = 0.1, maxTokens = 1200 } = {}) {
+  if (!DASHSCOPE_KEY) throw new Error('DASHSCOPE_API_KEY not configured');
+  const response = await fetch(DASHSCOPE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${DASHSCOPE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      max_tokens: maxTokens,
+      messages,
+      ...(model === QWEN_VL_MODEL ? { vl_high_resolution_images: true } : {}),
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Qwen ${model} ${response.status}: ${text.slice(0, 500)}`);
+  }
+  const data = await response.json();
+  const raw = data?.choices?.[0]?.message?.content ?? '';
+  return typeof raw === 'string' ? raw.trim() : String(raw?.[0]?.text || '').trim();
+}
+
+async function invokeQwenText(systemText, userText, opts = {}) {
+  return callQwen([
+    { role: 'system', content: systemText },
+    { role: 'user', content: userText },
+  ], { model: QWEN_TEXT_MODEL, ...opts });
+}
+
+async function invokeQwenVision(systemText, userText, base64Image, mimeType = 'image/jpeg') {
+  return callQwen([
+    { role: 'system', content: systemText },
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+        { type: 'text', text: userText },
+      ],
+    },
+  ], { model: QWEN_VL_MODEL, temperature: 0, maxTokens: 1400 });
+}
+
+function categorizeFoodItem(name) {
+  const s = String(name || '').toLowerCase();
+  if (/\b(water|tea|teh|kopi|coffee|milo|juice|soda|cola|beer|drink|ais|iced|latte)\b/.test(s)) return 'drinks';
+  if (/\b(cake|ice cream|cendol|dessert|pudding|brownie|waffle|sweet)\b/.test(s)) return 'dessert';
+  if (/\b(fries|roti|salad|sambal|soup|side|snack|kerabu|bread)\b/.test(s)) return 'sides';
+  if (/\b(nasi|rice|noodle|mee|kuey|burger|chicken|fish|beef|pasta|rendang|lemak|kandar|western)\b/.test(s)) return 'mains';
+  return 'other';
+}
+
+function parseJsonObject(rawText) {
+  const text = String(rawText || '').trim();
+  const clean = text.replace(/^```[a-z]*\n?/i, '').replace(/```$/i, '').trim();
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) throw new Error('AI response did not contain JSON object');
+  return JSON.parse(clean.slice(start, end + 1));
+}
+
+function parseJsonArray(rawText) {
+  const text = String(rawText || '').trim();
+  const clean = text.replace(/^```[a-z]*\n?/i, '').replace(/```$/i, '').trim();
+  const start = clean.indexOf('[');
+  const end = clean.lastIndexOf(']');
+  if (start === -1 || end === -1 || end <= start) throw new Error('AI response did not contain JSON array');
+  return JSON.parse(clean.slice(start, end + 1));
+}
+
+function inferCurrencyFallback(parsed, currentCurrency) {
+  if (currentCurrency !== 'MYR') return currentCurrency;
+  const haystack = [
+    parsed?.restaurant || '',
+    ...(Array.isArray(parsed?.items) ? parsed.items.map((it) => it?.name || '') : []),
+  ].join(' ');
+  if (/[\u0E00-\u0E7F]/.test(haystack) || /บาท/i.test(haystack)) return 'THB';
+  return currentCurrency;
+}
+
+function normalizeReceiptExtraction(parsed) {
+  if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+    throw new Error('No items could be extracted from the receipt.');
+  }
+  const ccyRaw = String(parsed.currency || 'MYR').toUpperCase().trim();
+  const normalized = SUPPORTED_CURRENCIES.includes(ccyRaw) ? ccyRaw : 'MYR';
+  const currency = inferCurrencyFallback(parsed, normalized);
+  const items = parsed.items.map((it, idx) => {
+    const qty = Number(it.qty) || 1;
+    let unit = 0;
+    if (typeof it.lineTotal === 'number') unit = qty > 0 ? +(it.lineTotal / qty).toFixed(4) : it.lineTotal;
+    else if (typeof it.unit === 'number') unit = it.unit;
+    return {
+      id: typeof it.id === 'number' ? it.id : idx + 1,
+      name: it.name || '',
+      qty,
+      unit,
+    };
+  });
+  return {
+    restaurant: parsed.restaurant ?? null,
+    date: typeof parsed.date === 'string' ? parsed.date : null,
+    currency,
+    items,
+    sst: typeof parsed.sst === 'number' ? parsed.sst : null,
+    serviceCharge: typeof parsed.serviceCharge === 'number' ? parsed.serviceCharge : null,
+  };
+}
 
 // Avatar palette assigned cyclically to contacts so each one gets a distinct
 // colour without forcing the client to manage the colour map.
@@ -1102,9 +1246,70 @@ export const handler = async (event) => {
       }
     }
 
+    // ---------- POST /ai/extract-receipt ----------
+    if (method === 'POST' && path === '/ai/extract-receipt') {
+      const imageBase64 = String(body.imageBase64 || body.base64Image || '').replace(/^data:image\/[a-z]+;base64,/i, '');
+      if (!imageBase64) return bad('missing imageBase64');
+      const raw = await invokeQwenVision(
+        'You are a meticulous OCR and data extraction expert for Southeast Asian restaurant receipts in English, Malay, and Chinese. Return JSON only.',
+        RECEIPT_OCR_PROMPT,
+        imageBase64,
+        body.mimeType || 'image/jpeg',
+      );
+      return ok({ ...normalizeReceiptExtraction(parseJsonObject(raw)), provider: QWEN_VL_MODEL });
+    }
+
+    // ---------- POST /ai/categorize-items ----------
+    if (method === 'POST' && path === '/ai/categorize-items') {
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (!items.length) return ok({ categories: {}, model: QWEN_TEXT_MODEL });
+      const names = items.map((it) => it.name || '');
+      let arr = [];
+      try {
+        const raw = await invokeQwenText(
+          'Categorise food and drink item names. Output ONLY a JSON array of strings. Allowed values: mains, drinks, sides, dessert, other.',
+          `Categorise each item into one of mains, drinks, sides, dessert, other. Return one category per input item in order.\n${JSON.stringify(names)}`,
+        );
+        arr = parseJsonArray(raw);
+      } catch (err) {
+        console.warn('item categorisation fallback:', err?.message || err);
+      }
+      const categories = {};
+      items.forEach((it, i) => {
+        const cat = String(arr[i] || categorizeFoodItem(it.name)).toLowerCase();
+        categories[it.id] = ITEM_CATEGORIES.includes(cat) ? cat : 'other';
+      });
+      return ok({ categories, model: QWEN_TEXT_MODEL });
+    }
+
+    // ---------- POST /ai/translate-items ----------
+    if (method === 'POST' && path === '/ai/translate-items') {
+      const items = Array.isArray(body.items) ? body.items : [];
+      const targetLang = String(body.targetLang || '').trim();
+      if (!items.length || !LANG_LABEL[targetLang]) return ok({ translations: {}, model: QWEN_TEXT_MODEL });
+      const names = items.map((it) => it.name || '');
+      const translations = {};
+      try {
+        const raw = await invokeQwenText(
+          `Translate food and drink item names to ${LANG_LABEL[targetLang]}. Output ONLY a JSON array of strings in the same order. Keep names short and natural. Preserve well-known proper names when appropriate.`,
+          JSON.stringify(names),
+        );
+        const arr = parseJsonArray(raw);
+        items.forEach((it, i) => {
+          const text = typeof arr[i] === 'string' ? arr[i].trim() : '';
+          if (text) translations[it.id] = text;
+        });
+      } catch (err) {
+        console.warn('Qwen translation fallback:', err?.message || err);
+        items.forEach((it) => {
+          if (it?.name) translations[it.id] = it.name;
+        });
+      }
+      return ok({ translations, model: QWEN_TEXT_MODEL });
+    }
+
     // ---------- POST /ai/summary ----------
     if (method === 'POST' && path === '/ai/summary') {
-      if (!DASHSCOPE_KEY) return bad('DASHSCOPE_API_KEY not configured', 503);
       const { billId } = body;
       if (!billId) return bad('missing billId');
 
@@ -1116,20 +1321,11 @@ export const handler = async (event) => {
       const lines   = Object.entries(totals).map(([n, v]) => `- ${n}: RM ${v.toFixed(2)}`).join('\n');
       const restaurant = r.Item.receiptMeta?.restaurant || 'our meal';
 
-      const aiResp = await fetch(DASHSCOPE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DASHSCOPE_KEY}` },
-        body: JSON.stringify({
-          model: 'qwen-plus',
-          messages: [
-            { role: 'system', content: 'You write short, friendly WhatsApp messages in mixed English + Bahasa Malaysia (with a tiny bit of Manglish like "lah", "ya"). 60 words max. Plain text. Friendly tone.' },
-            { role: 'user',   content: `Write a short WhatsApp message from "${r.Item.creator}" to friends, summarising the split for ${restaurant}.\n\nBreakdown:\n${lines}\n\nTotal: RM ${Object.values(totals).reduce((a,b)=>a+b,0).toFixed(2)}\nBill code: ${billId}\n\nKeep it casual but clear. Mention each person's amount. End with "Thanks!"` },
-          ],
-        }),
-      });
-      const aiJson = await aiResp.json();
-      const text   = aiJson?.choices?.[0]?.message?.content || aiJson?.error?.message || 'Could not generate message.';
-      return ok({ billId, message: text, model: 'qwen-plus' });
+      const text = await invokeQwenText(
+        'You write short, friendly WhatsApp messages in mixed English and Bahasa Malaysia with light Malaysian casual phrasing. 60 words max. Plain text.',
+        `Write a short WhatsApp message from "${r.Item.creator}" to friends, summarising the split for ${restaurant}.\n\nBreakdown:\n${lines}\n\nTotal: RM ${Object.values(totals).reduce((a,b)=>a+b,0).toFixed(2)}\nBill code: ${billId}\n\nKeep it casual but clear. Mention each person's amount. End with "Thanks!"`,
+      );
+      return ok({ billId, message: text || 'Could not generate message.', model: QWEN_TEXT_MODEL });
     }
 
     // ---------- POST /ai/trip-insights ----------
@@ -1140,7 +1336,6 @@ export const handler = async (event) => {
       const user = (body.user || '').trim();
       if (!travelGroupId) return bad('missing travelGroupId');
       if (!user) return bad('missing user');
-      if (!DASHSCOPE_KEY) return bad('DASHSCOPE_API_KEY not configured', 503);
 
       const r = await ddb.send(new ScanCommand({ TableName: TABLE }));
       const bills = (r.Items || []).filter(
@@ -1209,41 +1404,27 @@ export const handler = async (event) => {
 
       let advice = '';
       let comparison = '';
-      if (DASHSCOPE_KEY) {
-        try {
-          const prompt = [
-            `Trip ID: ${travelGroupId}`,
-            `Current user: ${user}`,
-            `Trip total (MYR): ${totalTripSpend.toFixed(2)}`,
-            `My spend (MYR): ${mySpend.toFixed(2)}`,
-            `Group average spend (MYR): ${groupAverage.toFixed(2)}`,
-            `Top spender: ${topSpender || 'N/A'}`,
-            `Category split: ${categoryBreakdown.map((c) => `${c.category} RM ${c.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
-            `Per person: ${perPersonSpend.map((p) => `${p.name} RM ${p.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
-          ].join('\n');
+      try {
+        const prompt = [
+          `Trip ID: ${travelGroupId}`,
+          `Current user: ${user}`,
+          `Trip total (MYR): ${totalTripSpend.toFixed(2)}`,
+          `My spend (MYR): ${mySpend.toFixed(2)}`,
+          `Group average spend (MYR): ${groupAverage.toFixed(2)}`,
+          `Top spender: ${topSpender || 'N/A'}`,
+          `Category split: ${categoryBreakdown.map((c) => `${c.category} RM ${c.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
+          `Per person: ${perPersonSpend.map((p) => `${p.name} RM ${p.amount.toFixed(2)}`).join(', ') || 'N/A'}`,
+        ].join('\n');
 
-          const aiResp = await fetch(DASHSCOPE_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DASHSCOPE_KEY}` },
-            body: JSON.stringify({
-              model: 'qwen-plus',
-              messages: [
-                {
-                  role: 'system',
-                  content: 'You are a practical PFM assistant. Return concise JSON only with keys: advice, comparison. Keep tone friendly, non-judgmental, and specific. Mention 1-2 actionable savings tips.',
-                },
-                { role: 'user', content: prompt },
-              ],
-            }),
-          });
-          const aiJson = await aiResp.json();
-          const raw = aiJson?.choices?.[0]?.message?.content || '';
-          const parsed = JSON.parse(raw);
-          advice = stripHyphenText(parsed?.advice);
-          comparison = stripHyphenText(parsed?.comparison);
-        } catch {
-          // fall through to deterministic fallback text
-        }
+        const raw = await invokeQwenText(
+          'You are a practical personal finance assistant. Return concise JSON only with keys: advice, comparison. Keep tone friendly, non-judgmental, and specific. Mention 1-2 actionable savings tips.',
+          prompt,
+        );
+        const parsed = parseJsonObject(raw);
+        advice = stripHyphenText(parsed?.advice);
+        comparison = stripHyphenText(parsed?.comparison);
+      } catch {
+        // fall through to deterministic fallback text
       }
 
       if (!advice) {
@@ -1313,7 +1494,6 @@ function normaliseSpendCategory(raw) {
 }
 
 async function classifyReceiptCategoryWithAI(bill) {
-  if (!DASHSCOPE_KEY) throw new Error('DASHSCOPE_API_KEY not configured for LLM-only category classification');
   const savedCategoryRaw = bill?.receiptMeta?.aiCategory || bill?.receiptMeta?.spendCategory || bill?.receiptMeta?.category;
   if (savedCategoryRaw) return normaliseSpendCategory(savedCategoryRaw);
 
@@ -1330,37 +1510,37 @@ async function classifyReceiptCategoryWithAI(bill) {
     }))
     : [];
 
-  const aiResp = await fetch(DASHSCOPE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DASHSCOPE_KEY}` },
-    body: JSON.stringify({
-      model: 'qwen-plus',
-      messages: [
-        {
-          role: 'system',
-          content: 'Classify this entire receipt into ONE spending category only. Allowed categories: food, fashion, amusement, transport, shopping, lodging, cosmetics, other. Return strict JSON: {"category":"<one category>","reason":"<short reason>"}',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            restaurant,
-            items,
-          }),
-        },
-      ],
-    }),
-  });
+  let category = inferReceiptCategory({ restaurant, items });
+  try {
+    const raw = await invokeQwenText(
+      'Classify one receipt into ONE spending category only. Allowed categories: food, fashion, amusement, transport, shopping, lodging, cosmetics, other. Return strict JSON: {"category":"<one category>","reason":"<short reason>"}',
+      JSON.stringify({ restaurant, items }),
+      { maxTokens: 180, temperature: 0 },
+    );
+    const parsed = parseJsonObject(raw);
+    category = normaliseSpendCategory(parsed?.category);
+  } catch (err) {
+    console.warn('category classification fallback:', err?.message || err);
+  }
 
-  const aiJson = await aiResp.json();
-  const raw = String(aiJson?.choices?.[0]?.message?.content || '').trim();
-  if (!raw) throw new Error('LLM returned empty category response');
-  const jsonCandidate = raw.match(/\{[\s\S]*\}/)?.[0];
-  if (!jsonCandidate) throw new Error('LLM response was not valid JSON');
-  const parsed = JSON.parse(jsonCandidate);
-  const category = normaliseSpendCategory(parsed?.category);
-  if (!category) throw new Error('LLM category missing');
   setCachedReceiptCategory(cacheKey, category);
   return category;
+}
+
+function inferReceiptCategory({ restaurant, items }) {
+  const text = [
+    restaurant,
+    ...(items || []).map((it) => it.name),
+  ].join(' ').toLowerCase();
+
+  if (/\b(hotel|hostel|inn|resort|stay|airbnb|suite|lodging|accommodation)\b/.test(text)) return 'lodging';
+  if (/\b(taxi|grab|train|rail|bus|metro|flight|airport|petrol|parking|transport)\b/.test(text)) return 'transport';
+  if (/\b(ticket|cinema|movie|theme park|museum|game|arcade|karaoke|spa|massage|tour)\b/.test(text)) return 'amusement';
+  if (/\b(sephora|cosmetic|beauty|skincare|makeup|lipstick|serum|sunscreen)\b/.test(text)) return 'cosmetics';
+  if (/\b(shirt|shoe|bag|fashion|clothing|apparel|dress|pants|uniqlo|zara)\b/.test(text)) return 'fashion';
+  if (/\b(mall|market|souvenir|gift|retail|store|shop)\b/.test(text)) return 'shopping';
+  if (/\b(food|restaurant|cafe|coffee|tea|rice|nasi|kandar|chef|western|pizza|burger|noodle|chicken|fish|meal|kitchen|bar|bistro|sarn|san)\b/.test(text)) return 'food';
+  return 'other';
 }
 
 function getReceiptCategoryCacheKey(bill) {
@@ -1408,6 +1588,6 @@ function renderEmailHtml(billId, bill, claims, totals) {
         <thead style="background:#f7f7f7"><tr><th style="text-align:left;padding:8px 12px">Person</th><th style="text-align:right;padding:8px 12px">Amount</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <p style="color:#888;font-size:12px;margin-top:24px">Bill closed and settled via SplitGo · powered by AWS + Alibaba Cloud</p>
+      <p style="color:#888;font-size:12px;margin-top:24px">Bill closed and settled via SplitGo · powered by AWS</p>
     </div>`;
 }

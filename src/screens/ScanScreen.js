@@ -131,7 +131,7 @@ export default function ScanScreen({ navigation }) {
   };
 
   /**
-   * Resize the captured photo before we ship it to Qwen-VL. A 12 MP iPhone
+   * Resize the captured photo before we ship it to Qwen-VL OCR. A 12 MP iPhone
    * photo (~4032×3024) is overkill for OCR and balloons the base64 payload
    * to several MB. Down-scaling to ~1600px wide:
    *   - Cuts the base64 size 4-6×, which makes the network round trip and

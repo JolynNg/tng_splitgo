@@ -227,6 +227,29 @@ export default function TravelGroupHubScreen({ navigation, route }) {
     [oweLines],
   );
 
+  const payableBills = useMemo(
+    () => tripBills
+      .filter((b) => (
+        b.status === 'open'
+        && b.creator
+        && b.creator !== myName
+        && !(b.paid || []).includes(myName)
+        && (b.ready || []).includes(myName)
+      ))
+      .map((b) => ({ billId: b.billId, creator: b.creator })),
+    [tripBills, myName],
+  );
+
+  const openPaySelection = () => {
+    if (oweLines.length === 0) return;
+    navigation.navigate('TravelPaySelection', {
+      travelGroupId,
+      travelGroupName,
+      oweLines,
+      payableBills,
+    });
+  };
+
   const getReceiptState = useCallback((bill) => {
     if (!myName) return { label: 'not yet selected', tone: 'todo' };
     if (bill.status === 'closed') return { label: 'settled', tone: 'done' };
@@ -411,7 +434,12 @@ export default function TravelGroupHubScreen({ navigation, route }) {
           </Text>
         ) : (
           <>
-            <Text style={styles.totalPayAmt}>RM {totalToPay.toFixed(2)}</Text>
+            <View style={styles.totalPayRow}>
+              <Text style={styles.totalPayAmt}>RM {totalToPay.toFixed(2)}</Text>
+              <TouchableOpacity style={styles.payNowBtn} onPress={openPaySelection} activeOpacity={0.85}>
+                <Text style={styles.payNowText}>Pay</Text>
+              </TouchableOpacity>
+            </View>
             {oweLines.map((l) => (
               <Text key={`o-${l.to}`} style={styles.perMemberLine}>
                 Pay <Text style={styles.bold}>{l.to}</Text> · RM {l.amount.toFixed(2)}
@@ -499,6 +527,12 @@ const styles = StyleSheet.create({
   settleTitle: { fontSize: 13, fontWeight: '800', color: SG.ink, marginBottom: 6 },
   settleHint: { fontSize: 12, color: SG.muted, lineHeight: 18 },
   totalPayAmt: { fontSize: 26, fontWeight: '800', color: SG.primary, marginBottom: 6, letterSpacing: -0.4 },
+  totalPayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  payNowBtn: {
+    minWidth: 76, height: 38, borderRadius: 12, backgroundColor: SG.primary,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
+  },
+  payNowText: { color: '#fff', fontSize: 14, fontWeight: '800' },
   perMemberLine: { fontSize: 11, color: SG.muted, marginTop: 3, lineHeight: 16 },
   bold: { fontWeight: '800' },
   netLine: { fontSize: 11, color: SG.muted, marginTop: 8, lineHeight: 16 },
